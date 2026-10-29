@@ -117,6 +117,15 @@ def run_doctor(cfg: Config | None = None, workdir: Path | None = None, write_rep
     kenv = cfg.root / "provider_envs" / "kokoro" / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
     add("kokoro_env", "pass" if kenv.is_file() else "info",
         "설치됨" if kenv.is_file() else "미설치 (Windows: scripts/setup_kokoro.ps1)")
+    prov = cfg.defaults.get("providers") or {}
+    g_cli = os.environ.get("AVSYNC_GEMINI_CLI") or (prov.get("gemini") or {}).get("cli_path") or shutil.which("gemini-api")
+    ack = cfg.model_cache() / "gemini_free_ack.json"
+    add("gemini_cli", "info", f"{g_cli}" if g_cli else "gemini-api CLI 없음 (선택 기능: Gemini TTS)")
+    if g_cli:
+        add("gemini_free_ack", "pass" if ack.is_file() else "info",
+            "무료 키 확인 완료" if ack.is_file() else "미확인 - Gemini 사용 전 `avsync gemini confirm-free --yes`")
+    k_cli = os.environ.get("AVSYNC_KAGGLE_CLI") or shutil.which("kaggle")
+    add("kaggle_cli", "info", f"{k_cli}" if k_cli else "kaggle CLI 없음 (선택 기능: 원격 GPU BGM)")
     status = "fail" if any(c["status"] == "fail" for c in checks) else (
         "warn" if any(c["status"] == "warn" for c in checks) else "pass")
     return {"status": status, "checks": checks}

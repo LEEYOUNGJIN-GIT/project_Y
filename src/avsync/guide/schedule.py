@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from ..domain.keys import GUIDE, check_tree, unknown_keys
 from ..domain.script import LINE_KEY, Line, ScriptError, _LineLoader
 from ..domain.timebase import TimeError, parse_time
 
@@ -31,6 +32,10 @@ class GuideSpec:
     steps: list[StepSpec]
     tail_us: int
     lead_in_ms: int | None
+    count_beats: int | None = None          # 음악 우선: 카운트 1개 = N박
+    bpm: float | str | None = None          # 숫자 또는 'from_bgm'
+    beat_align: bool = False                # 첫 호흡이 BGM의 박에 오도록 BGM 앞부분을 잘라 맞춤
+    warnings: list = field(default_factory=list)
 
 
 @dataclass
@@ -79,13 +84,26 @@ def load_guide(path: Path) -> GuideSpec:
         err(ci.get(LINE_KEY, 1), f"count_in.count_in_s가 필요합니다 (초): {ci.get('count_in_s')!r}")
         count_in_us = 0
     br = data.get("breath") or {}
-    try:
-        count_us = parse_time(br.get("count_s"))
-        if count_us <= 0:
-            raise TimeError("0 이하")
-    except (TimeError, TypeError) as e:
-        err(br.get(LINE_KEY, 1), f"breath.count_s가 필요합니다 (양수 초): {e}")
-        count_us = 0
+    count_beats = br.get("count_beats")
+    bpm = br.get("bpm")
+    beat_align = bool(br.get("beat_align", False))
+    count_us = 0
+    if count_beats is not None:
+        if br.get("count_s") is not None:
+            err(br.get(LINE_KEY, 1), "breath에 count_s와 count_beats를 함께 쓸 수 없습니다")
+        if not isinstance(count_beats, int) or isinstance(count_beats, bool) or count_beats < 1:
+            err(br.get(LINE_KEY, 1), f"breath.count_beats는 1 이상의 정수여야 합니다: {count_beats!r}")
+        if bpm != "from_bgm" and not (isinstance(bpm, (int, float)) and not isinstance(bpm, bool) and 30 <= bpm <= 300):
+            err(br.get(LINE_KEY, 1), f"count_beats에는 breath.bpm이 필요합니다 (30-300 숫자 또는 'from_bgm'): {bpm!r}")
+    else:
+        if bpm is not None or beat_align:
+            err(br.get(LINE_KEY, 1), "bpm/beat_align은 count_beats와 함께 쓰는 설정입니다")
+        try:
+            count_us = parse_time(br.get("count_s"))
+            if count_us <= 0:
+                raise TimeError("0 이하")
+        except (TimeError, TypeError) as e:
+            err(br.get(LINE_KEY, 1), f"breath.count_s가 필요합니다 (양수 초) 또는 count_beats+bpm: {e}")
     tail_us = parse_time(data["tail_s"]) if data.get("tail_s") is not None else 0
     steps = []
     raw_steps = data.get("steps")
@@ -116,12 +134,16 @@ def load_guide(path: Path) -> GuideSpec:
     return GuideSpec(
         count_in_text=str(ci.get("text", "")).strip(), count_in_us=count_in_us,
         start_tone=bool(ci.get("start_tone", True)), count_us=count_us, steps=steps, tail_us=tail_us,
-        lead_in_ms=int(lead) if lead is not None else None,
+        lead_in_ms=int(lead) if lead is not None else None, count_beats=count_beats, bpm=bpm, beat_align=beat_align,
+        warnings=check_tree(data, {k: v for k, v in GUIDE.items() if k != "step"}, "")
+        + [w for st in raw_steps if isinstance(st, dict) for w in unknown_keys(st, GUIDE["step"], f"steps[{st.get('line', '?')}]")],
     )
 
 
 def build_plan(spec: GuideSpec, lines: dict[str, Line], *, lead_in_ms: int, count_in_speak_ms: int = 300) -> GuidePlan:
     """각 단계의 시작 = count_in + (앞 단계 counts 합) x count_s. 내레이션은 시작 + lead_in."""
+    if spec.count_us <= 0:
+        raise ScriptError(["호흡 길이(count_s)가 정해지지 않았습니다. count_beats를 쓰면 BPM으로 먼저 계산해 spec에 반영해야 합니다"])
     missing = [s.line for s in spec.steps if s.line not in lines]
     if missing:
         raise ScriptError([f"guide.yaml의 line이 script.yaml에 없습니다: {missing}"])

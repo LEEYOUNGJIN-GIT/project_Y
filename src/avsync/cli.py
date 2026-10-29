@@ -11,7 +11,7 @@ from pathlib import Path
 from . import pipeline as P
 from .config import ConfigError, load_config
 from .domain.manifest import read_json
-from .domain.script import ScriptError
+from .domain.script import ScriptError, load_script
 from .domain.timebase import TimeError, fmt_time, parse_time
 from .platform.ffmpeg import FFmpeg, ToolError, find_tools
 from .platform.process import ProcessFailed
@@ -79,6 +79,7 @@ def cmd_inspect_video(args) -> int:
 
 def cmd_check_script(args) -> int:
     from .checkscript import check_script
+    from .guide.schedule import load_guide
     from .domain.script import load_script
     ctx = _ctx(args)
     af = _is_audio_first(ctx)
@@ -88,7 +89,6 @@ def cmd_check_script(args) -> int:
     script = load_script(ctx.project.script, require_at=not af, fps=fps)
     budgets: dict[str, int | None] = {}
     if af:
-        from .guide.schedule import load_guide
         spec = load_guide(ctx.project.guide)
         lead = (spec.lead_in_ms if spec.lead_in_ms is not None else ctx.gates["guide"]["lead_in_ms"]) * 1000
         for st in spec.steps:
@@ -101,6 +101,9 @@ def cmd_check_script(args) -> int:
             budgets[ln.id] = end - ln.at_us
     findings = check_script(script, ctx.tts_cfg, ctx.cfg.defaults["tts"]["words_per_second"],
                             budgets_us=budgets, audio_first=af)
+    findings += [{"level": "warn", "id": None, "message": w} for w in script.warnings]
+    if af:
+        findings += [{"level": "warn", "id": None, "message": f"guide.yaml {w}"} for w in load_guide(ctx.project.guide).warnings]
     lines = [f"{f['level'].upper():<5} {f['id'] or '-':<6} {f['message']}" for f in findings]
     lines.append(f"항목 {len(script.lines)}개, 경고 {sum(1 for f in findings if f['level'] == 'warn')}개")
     _emit(args, {"findings": findings, "lines": len(script.lines)}, "\n".join(lines))
@@ -216,6 +219,46 @@ def cmd_qa(args) -> int:
     rows.append(f"종합: {rep['status'].upper()}  (보고서: {ctx.path('out', 'qa_report.md')})")
     _emit(args, rep, "\n".join(rows))
     return EXIT_CONTENT if rep["status"] == "fail" else EXIT_OK
+
+
+def cmd_build(args) -> int:
+    """video-first 일괄 실행: plan -> tts -> (fit 오류 시 중단) -> mix -> render -> qa."""
+    import contextlib
+    import io
+    import types
+    ctx = _ctx(args)
+    if _is_audio_first(ctx):
+        raise ConfigError("audio-first 프로젝트입니다. `avsync guide` 후 촬영하고 `avsync merge`를 쓰세요.")
+    approved = load_script(ctx.project.script, require_at=True, fps=P.video_info(ctx).fps).approved
+    preview = args.preview or not approved
+    if preview and not args.json:
+        print("참고: script.yaml이 approved: false라서 미리듣기 렌더(.preview.mp4)로 진행합니다" if not approved else "미리듣기 렌더로 진행합니다")
+    steps = [("plan", cmd_plan, {}), ("tts", cmd_tts, {"all": True, "line": None}), ("mix", cmd_mix, {"allow_errors": False}),
+             ("render", cmd_render, {"preview": preview}), ("qa", cmd_qa, {})]
+    results = {}
+    rc = EXIT_OK
+    for name, fn, extra in steps:
+        ns = types.SimpleNamespace(**{**vars(args), **extra, "json": args.json, "dry_run": False})
+        if args.json:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                step_rc = fn(ns)
+            try:
+                results[name] = {"rc": step_rc, "result": json.loads(buf.getvalue() or "null")}
+            except json.JSONDecodeError:
+                results[name] = {"rc": step_rc, "output": buf.getvalue()}
+        else:
+            print(f"\n== {name} ==")
+            step_rc = fn(ns)
+            results[name] = {"rc": step_rc}
+        if step_rc != EXIT_OK and name != "qa":
+            rc = step_rc
+            break
+        if name == "qa":
+            rc = step_rc
+    if args.json:
+        print(json.dumps({"steps": results, "rc": rc}, ensure_ascii=False, indent=2, default=str))
+    return rc
 
 
 def cmd_guide(args) -> int:
@@ -360,6 +403,22 @@ def cmd_benchmark(args) -> int:
     return EXIT_OK
 
 
+def cmd_beats(args) -> int:
+    from .audio.beats import analyze_file
+    cfg = load_config()
+    ff = FFmpeg(find_tools(cfg))
+    info = analyze_file(ff, Path(args.file), Path(tempfile.mkdtemp(prefix="avsync_beats_")))
+    if not info.has_beat:
+        _emit(args, info.as_dict(), "박자 없음: " + "; ".join(info.notes) + "\n(앰비언트/드론이면 정상입니다. guide.yaml은 breath.count_s를 쓰세요)")
+        return EXIT_OK
+    rows = [f"BPM {info.bpm:.2f} (신뢰도 {info.confidence:.2f}), 주기 {info.period_us / 1000:.1f}ms, 첫 박 {fmt_time(info.phase_us)}",
+            "다운비트(4박 주기 추정): " + (f"{info.downbeat_offset}번째 박" if info.downbeat_offset is not None else "불확실")]
+    rows += [f"참고: {n}" for n in info.notes]
+    rows.append("주의: 합성 클릭 트랙으로만 검증한 신호처리 휴리스틱입니다. 실제 곡은 귀로 확인하세요. 템포 오차 e는 곡 길이에 비례한 박 위치 어긋남으로 누적됩니다.")
+    _emit(args, info.as_dict(), "\n".join(rows))
+    return EXIT_OK
+
+
 def cmd_gemini(args) -> int:
     from .domain.manifest import now_iso, write_json
     from .providers.tts.gemini_cli import find_cli
@@ -498,6 +557,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("video")
     add("check-script", cmd_check_script, "대본·발음·글자 수 예산 검증")
     add("plan", cmd_plan, "[video-first] 타임라인 확정")
+    sp = add("build", cmd_build, "[video-first] plan -> tts -> mix -> render -> qa 한 번에")
+    sp.add_argument("--provider")
+    sp.add_argument("--preview", action="store_true", help="미리듣기 렌더로 강제")
     sp = add("guide", cmd_guide, "[audio-first] 시간표·가이드 소리 생성/내보내기")
     sp.add_argument("--provider")
     sp = add("merge", cmd_merge, "[audio-first] 촬영본과 가이드 소리를 오프셋으로 합성")
@@ -544,6 +606,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-sentences", type=int, help="청취용 문장 수 제한 (gemini 기본 6)")
     sp.add_argument("--listen", action="store_true", help="청취 평가용 문장 WAV를 reports/listening/에 출력")
     sp.add_argument("--acceptance", help="acceptance_wait가 적힌 YAML (12.1)")
+    sp = add("beats", cmd_beats, "BGM의 템포·박 분석 (음악 우선 모드)")
+    sp.add_argument("file")
     gp = sub.add_parser("gemini", help="Gemini TTS 설정").add_subparsers(dest="gcmd", required=True)
     sp = gp.add_parser("confirm-free", parents=[common], help="결제 미연결 프로젝트의 키임을 확인(5.7 free_only)")
     sp.set_defaults(func=cmd_gemini)

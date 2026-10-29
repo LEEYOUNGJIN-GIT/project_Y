@@ -1,7 +1,6 @@
 """FFmpeg가 필요한 통합 테스트. TTS는 가짜 공급자, 영상·BGM은 합성 파일을 쓴다."""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from pathlib import Path
@@ -404,3 +403,35 @@ def test_audio_start_offset_is_respected_for_original_audio(tmp_path, ff):
     early = measure_rms_db(ff, out, 100_000, 300_000)        # 영상 시간 0.1-0.4초: 아직 소리 없음
     later = measure_rms_db(ff, out, 800_000, 400_000)        # 0.8-1.2초: 소리 있음
     assert (early is None or early < -60) and later is not None and later > -30
+
+
+# ------------------------------------------------------------------ build / 오타 경고
+
+def test_build_runs_all_steps_and_stops_on_fit_error(tmp_path, ff, fake, video916, capsys):
+    proj = write_project(tmp_path / "b", video=video916, script=VF_SCRIPT.format(appr="false"))
+    assert cli("build", "--project", proj) == 0                       # 미승인이면 자동으로 미리듣기 렌더
+    out = proj.parent / "outputs"
+    assert (out / "t1.preview.mp4").is_file() and not (out / "t1.mp4").exists() and (out / "qa_report.md").is_file()
+    assert "approved: false" in capsys.readouterr().out
+    bad = write_project(tmp_path / "bad", video=video916, script=VF_SCRIPT.format(appr="true").replace('at: "00:04.0"', 'at: "00:01.5"'))
+    assert cli("build", "--project", bad) == 2                        # fit 오류에서 멈춤
+    assert not (bad.parent / "outputs" / "t1.mp4").exists()
+
+
+def test_build_json_summarises_steps(tmp_path, ff, fake, video916, capsys):
+    proj = write_project(tmp_path / "bj", video=video916, script=VF_SCRIPT.format(appr="true"))
+    assert cli("build", "--project", proj, "--json") == 0
+    res = json.loads(capsys.readouterr().out)
+    assert list(res["steps"]) == ["plan", "tts", "mix", "render", "qa"] and all(v["rc"] == 0 for v in res["steps"].values())
+
+
+def test_unknown_keys_are_reported_not_silently_ignored(tmp_path, ff, fake, video916, capsys):
+    proj = write_project(tmp_path / "typo", video=video916, script=VF_SCRIPT.format(appr="true"))
+    proj.write_text(proj.read_text().replace("tone: yoga_flow_calm", "tone: yoga_flow_calm\nouptut: {reframe: none}"), encoding="utf-8")
+    s = proj.parent / "script.yaml"
+    s.write_text(s.read_text().replace("mood: calm", "mood: calm, emphsis: [Start]", 1), encoding="utf-8")
+    capsys.readouterr()
+    assert cli("check-script", "--project", proj) == 0
+    cap = capsys.readouterr()
+    assert "알 수 없는 키 'ouptut'" in cap.err and "혹시 'output'" in cap.err
+    assert "알 수 없는 키 'emphsis'" in cap.out and "혹시 'emphasis'" in cap.out

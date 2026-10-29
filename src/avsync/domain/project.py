@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import ConfigError, load_yaml
+from .keys import PROJECT, check_tree
 
 ORIGINAL_POLICIES = ("remove", "keep", "duck")
 REFRAMES = ("none", "blur_pad", "crop_center", "pad_solid")
@@ -38,6 +39,7 @@ class Project:
     loudness_lufs: float | None
     true_peak_dbfs: float | None
     raw: dict
+    warnings: list[str] = None  # type: ignore[assignment]
 
     @property
     def cache(self) -> Path:
@@ -109,5 +111,5 @@ def load_project(path: Path) -> Project:
         profile=out.get("profile", "reels_9x16"), reframe=reframe, captions=captions,
         caption_style=out.get("caption_style") or {},
         loudness_lufs=out.get("loudness_lufs"), true_peak_dbfs=out.get("true_peak_dbfs"),
-        raw=data,
+        raw=data, warnings=check_tree(data, PROJECT),
     )

@@ -8,7 +8,7 @@ import wave
 from pathlib import Path
 
 import pytest
-from fake_acestep_server import Handler, make_wav, start
+from fake_acestep_server import Handler, start
 
 from avsync.audio.vocals import FPS, score_envelope
 from avsync.cli import main

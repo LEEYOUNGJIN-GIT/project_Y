@@ -110,6 +110,12 @@ def prepare_bgm(ff: FFmpeg, src: Path, src_duration_us: int, duration_us: int, o
     return info
 
 
+def trim_head(ff: FFmpeg, src: Path, head_us: int, out: Path, work: Path) -> None:
+    """앞 head_us를 잘라 낸다 (BGM 박을 첫 호흡에 맞추기 위함)."""
+    _run_script(ff, [src], f"[0:a]atrim=start={head_us / US:.6f},asetpts=PTS-STARTPTS[o]", "o", out, work,
+                context="BGM 앞부분 정렬")
+
+
 def apply_gain(ff: FFmpeg, src: Path, out: Path, work: Path, *, gain_db: float) -> None:
     _run_script(ff, [src], f"[0:a]volume={gain_db}dB[o]", "o", out, work, context="이득 적용")
 

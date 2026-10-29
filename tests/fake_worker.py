@@ -1,7 +1,6 @@
 """SubprocessTTSProvider 프로토콜 시험용 워커 (JSON Lines). 실제 Kokoro 워커와 같은 메시지 형식을 쓴다."""
 import json
 import math
-import os
 import sys
 import wave
 

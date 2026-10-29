@@ -1,6 +1,7 @@
 """단계별 오케스트레이션: 타임라인 -> TTS/fit -> 믹스 -> 렌더 -> manifest. CLI는 이 함수들을 호출만 한다."""
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,8 @@ def make_context(project_path: Path) -> Context:
     cfg = load_config()
     project = load_project(project_path)
     project.ensure_dirs()
+    for w in project.warnings or []:
+        print(f"경고(project.yaml) {w}", file=sys.stderr)
     return Context(cfg, FFmpeg(find_tools(cfg)), project, cfg.tone(project.tone), cfg.gates)
 
 
@@ -192,7 +195,7 @@ def fit_has_errors(report: dict) -> bool:
 
 def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Path,
             original_media: Path | None, original_policy: str, original_has_audio: bool,
-            cue_items: list[BusItem] | None = None) -> dict:
+            cue_items: list[BusItem] | None = None, bgm_head_trim_us: int = 0) -> dict:
     ff, tone, g = ctx.ff, ctx.tone, ctx.gates["mix"]
     D = timeline["duration_us"]
     work.mkdir(parents=True, exist_ok=True)
@@ -214,7 +217,12 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
         if bpath is None or not bpath.is_file():
             raise ConfigError(f"BGM 파일이 없습니다: {bpath}")
         fit_bgm = work / "bgm_fit.wav"
-        info = M.prepare_bgm(ff, bpath, probe_audio_duration_us(ctx.ff.tools, bpath), D, fit_bgm, work,
+        src_bgm, src_dur = bpath, probe_audio_duration_us(ctx.ff.tools, bpath)
+        if bgm_head_trim_us > 0:
+            src_bgm = work / "bgm_trimmed.wav"
+            M.trim_head(ff, bpath, bgm_head_trim_us, src_bgm, work)
+            src_dur -= bgm_head_trim_us
+        info = M.prepare_bgm(ff, src_bgm, src_dur, D, fit_bgm, work,
                              fade_in_s=float(bgm_cfg.get("fade_in_s", 1.0)),
                              fade_out_s=float(bgm_cfg.get("fade_out_s", 2.0)),
                              midrange_cut_db=float(bgm_cfg.get("midrange_1_4khz_cut_db", 0.0)))
@@ -234,7 +242,8 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
                       "gain_db": round(gain, 2), "narration_lufs": n_lufs, "bgm_lufs": b_lufs,
                       "duck_db": duck_db, "license_note": proj_bgm.license_note}
         if info["loops"] > 1:
-            rep["warnings"].append(f"BGM이 짧아 {info['loops']}회 크로스페이드 루프함")
+            rep["warnings"].append(f"BGM이 짧아 {info['loops']}회 크로스페이드 루프함"
+                                   + (" - 박 정렬은 첫 구간에서만 보장됨(이음매 이후는 보장 안 됨)" if bgm_head_trim_us > 0 else ""))
         if not proj_bgm.license_note:
             rep["warnings"].append("BGM license_note가 비어 있음 (출처·라이선스를 기록하세요)")
 

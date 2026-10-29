@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ..audio.loudness import measure_ebur128, measure_peak_db, measure_rms_db
-from ..domain.timebase import US, fmt_time
+from ..domain.timebase import fmt_time
 from ..platform.ffmpeg import FFmpeg
 from ..video.probe import stream_durations_us
 

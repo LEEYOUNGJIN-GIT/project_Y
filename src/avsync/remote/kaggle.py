@@ -6,19 +6,15 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
-import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..audio.loudness import measure_ebur128, measure_peak_db
 from ..audio.vocals import vocal_score
 from ..bgmlib import import_bgm
-from ..domain.hashing import sha256_file
 from ..domain.manifest import now_iso, read_json, write_json
 from ..platform.ffmpeg import FFmpeg
 from ..platform.process import run

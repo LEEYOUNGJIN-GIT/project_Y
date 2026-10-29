@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import math
 from array import array
-from pathlib import Path
 
 from avsync.audio.wavutil import Pcm, write_wav
 from avsync.providers.tts.base import TTSCapabilities, TTSRequest, TTSResult
