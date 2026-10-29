@@ -10,11 +10,13 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from ..audio.wavutil import Pcm, concat, read_wav, silence, trim_silence, write_wav
+from ..audio.wavutil import Pcm, concat, read_wav, silence, trim_silence_info, write_wav
 from ..domain.hashing import sha256_file, sha256_json
 from ..domain.script import Line
 from ..domain.timebase import samples_to_us
 from ..providers.tts.base import ProviderError, TTSProvider, TTSRequest
+import re
+
 from .normalize import Spoken, apply_pronunciations, is_cue_sentence, split_emphasis, split_sentences
 
 
@@ -28,6 +30,7 @@ class Segment:
     fragments: int = 1
     is_cue: bool = False
     speed: float = 1.0
+    words: list = field(default_factory=list)   # [{text, start_us, end_us}] 항목 시작 기준. 공급자가 제공할 때만
 
 
 @dataclass
@@ -119,6 +122,7 @@ class Synthesizer:
         sent_start: dict[int, int] = {}
         sent_frags: dict[int, list[_Frag]] = {}
         sent_end: dict[int, int] = {}
+        sent_words: dict[int, list] = {}
         prev: _Frag | None = None
         for i, fr in enumerate(frags):
             out = tmp_dir / f"{key}_{i}.wav"
@@ -126,7 +130,7 @@ class Synthesizer:
             res = self.provider.synthesize(TTSRequest(fr.spoken.spoken, self.voice_id, fr.speed, self.lang, out))
             self.synth_seconds += time.perf_counter() - t0
             self.calls += 1
-            pcm = trim_silence(read_wav(res.wav_path))
+            pcm, head = trim_silence_info(read_wav(res.wav_path))
             out.unlink(missing_ok=True)
             if pcm.frames == 0:
                 raise ProviderError(f"{line.id}: 빈 오디오가 합성됨 ({fr.spoken.spoken!r})")
@@ -139,6 +143,8 @@ class Synthesizer:
                 parts.append(gap)
                 cursor += gap.frames
             sent_start.setdefault(fr.sentence_index, cursor)
+            sent_words.setdefault(fr.sentence_index, []).extend(
+                _map_words(res.meta.get("words"), fr, head, cursor, pcm.frames, pcm.rate, res.sample_rate))
             cursor += pcm.frames
             sent_end[fr.sentence_index] = cursor
             sent_frags.setdefault(fr.sentence_index, []).append(fr)
@@ -150,7 +156,8 @@ class Synthesizer:
             segs.append(Segment(
                 original=" ".join(f.spoken.original for f in fs), normalized=" ".join(f.spoken.normalized for f in fs),
                 spoken=" ".join(f.spoken.spoken for f in fs), start_us=samples_to_us(sent_start[si], rate),
-                end_us=samples_to_us(sent_end[si], rate), fragments=len(fs), is_cue=cue, speed=fs[0].speed))
+                end_us=samples_to_us(sent_end[si], rate), fragments=len(fs), is_cue=cue, speed=fs[0].speed,
+                words=sent_words.get(si, [])))
         merged = concat(parts)
         write_wav(wav, merged)
         sha = sha256_file(wav)
@@ -160,3 +167,28 @@ class Synthesizer:
             "provider": self.caps.name, "voice": self.voice_id,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
         return LineAudio(line.id, wav, merged.duration_us, merged.rate, speed, segs, key, sha, False, warnings)
+
+
+_WORD_RE = re.compile(r"[A-Za-z0-9'\u2019\-]+")
+
+
+def _map_words(words, fr: "_Frag", head_frames: int, cursor: int, frames: int, rate: int, src_rate: int) -> list[dict]:
+    """공급자 단어 시각(초, 합성 파일 기준)을 항목 시작 기준 us로 바꾼다.
+
+    - 무음 트리밍으로 앞에서 잘린 만큼(head_frames) 앞당기고, 조각이 놓인 위치(cursor)를 더한다.
+    - 발음 치환(respell)으로 단어 글자가 바뀐 경우, 단어 개수가 같으면 원문 단어로 되돌린다.
+    - 조각 길이를 벗어나는 값은 잘라 맞춘다(예측 시각의 오차 방어).
+    """
+    if not words:
+        return []
+    orig = _WORD_RE.findall(fr.spoken.original)
+    same = len(orig) == len(words)
+    out = []
+    for i, w in enumerate(words):
+        s_f = round(w["start"] * src_rate) - head_frames
+        e_f = round(w["end"] * src_rate) - head_frames
+        s_f = min(max(0, s_f), frames)
+        e_f = min(max(s_f, e_f), frames)
+        out.append({"text": orig[i] if same else w["text"], "start_us": samples_to_us(cursor + s_f, rate),
+                    "end_us": samples_to_us(cursor + e_f, rate)})
+    return out

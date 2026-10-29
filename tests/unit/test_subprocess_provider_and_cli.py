@@ -14,7 +14,7 @@ WORKER = Path(__file__).parent.parent / "fake_worker.py"
 
 @pytest.fixture
 def prov():
-    p = SubprocessTTSProvider([sys.executable, "-I", str(WORKER)])
+    p = SubprocessTTSProvider([sys.executable, str(WORKER)])
     yield p
     p.close()
 
@@ -99,7 +99,7 @@ def test_benchmark_with_fake_provider(tmp_path, monkeypatch, capsys):
 
 def test_worker_with_non_ascii_text_and_errors_roundtrips(tmp_path):
     """Windows 회귀: 자식 stdout 기본 인코딩이 cp1252여도 한글 오류 메시지·IPA 문자가 깨지거나 워커가 죽지 않아야 한다."""
-    p = SubprocessTTSProvider([sys.executable, "-I", str(WORKER)])
+    p = SubprocessTTSProvider([sys.executable, str(WORKER)])
     try:
         with pytest.raises(ProviderError, match="voice_id"):                    # 한글 포함 오류 응답
             p.synthesize(req(tmp_path, voice=None))
@@ -112,3 +112,10 @@ def test_worker_with_non_ascii_text_and_errors_roundtrips(tmp_path):
 def test_doctor_filter_detection_uses_help_not_listing(ff):
     assert ff.has_filter("adelay") and ff.has_filter("amix")
     assert not ff.has_filter("definitely_not_a_filter")
+
+
+def test_stdout_noise_from_libraries_is_ignored(prov, tmp_path, capfd):
+    """Windows CI 회귀: 라이브러리가 stdout에 쓴 진행 메시지가 JSON 프로토콜을 깨면 안 된다."""
+    r = prov.synthesize(req(tmp_path, text="__NOISE__"))
+    assert r.duration_us > 0
+    assert "Downloading en-core-web-sm" in capfd.readouterr().err               # 소음은 버리지 않고 stderr로 흘려보냄

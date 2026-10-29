@@ -24,7 +24,8 @@ REQUIRED_FILTERS = {
 }
 OPTIONAL_FILTERS = {
     "sidechaincompress": "문서 5.4의 사이드체인 덕킹 (이 구현은 이득 곡선 방식을 쓰므로 필수 아님)",
-    "subtitles": "burn-in 자막(후순위, libass 필요)",
+    "ass": "burn-in 자막 (libass 필요). 없으면 sidecar_srt만 사용",
+    "subtitles": "SRT burn-in (libass 필요)",
     "flite": "오프라인 시험용 TTS(제작에는 쓰지 않음)",
 }
 

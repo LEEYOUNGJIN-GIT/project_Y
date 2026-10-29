@@ -20,7 +20,7 @@ def merge_guide(cfg, ff, *, video: Path, guide_wav: Path, out: Path, offset_us: 
                 marks: dict[str, int] | None = None, stretch: bool = False,
                 original: str, trim_start_us: int, trim_end_us: int | None, accurate_trim: bool,
                 shot_hash8: str | None, preview_ok: bool, reframe: str, profile_name: str,
-                work: Path, duck_under_db: float) -> dict:
+                work: Path, duck_under_db: float, burn_style=None) -> dict:
     gj_path = guide_wav.with_suffix(".json")
     if not gj_path.is_file():
         raise P.ConfigError(f"가이드 메타 JSON이 없습니다: {gj_path} (guide 명령이 같이 내보낸 파일이 필요합니다)")
@@ -122,9 +122,18 @@ def merge_guide(cfg, ff, *, video: Path, guide_wav: Path, out: Path, offset_us: 
                            budget_db=gates["mix"]["limiter_budget_db"])
 
     profile = cfg.profile(profile_name)
+    burn = None
+    if burn_style is not None:
+        from ..captions.ass import Caption, prepare_ass_dir
+        if not ff.has_filter("ass"):
+            raise P.ConfigError("이 FFmpeg 빌드에는 ass 필터(libass)가 없어 burn-in 자막을 쓸 수 없습니다")
+        burn = prepare_ass_dir(work / "burn", [
+            Caption(c["start_us"] + shift, c["end_us"] + shift, c["text"],
+                    [{**w, "start_us": w["start_us"] + shift, "end_us": w["end_us"] + shift} for w in c.get("words", [])])
+            for c in gj["captions"]], burn_style)
     r = mux(ff, info, master, out, profile, reframe, trim_start_us=trim_start_us,
             trim_end_us=end_us if (trim_start_us > 0 or trim_end_us is not None) else None,
-            accurate_trim=accurate_trim)
+            accurate_trim=accurate_trim, burn_dir=burn)
     srt_path = out.with_suffix(".srt")
     caps = [{"at_us": c["start_us"], "audio": {"segments": [{"start_us": 0, "end_us": c["end_us"] - c["start_us"],
                                                               "original": c["text"]}]}} for c in gj["captions"]]
@@ -181,7 +190,9 @@ def scale_guide_meta(gj: dict, scale: float) -> dict:
     g["steps"] = [{**st, "start_us": sc(st["start_us"]), "end_us": sc(st["end_us"]), "speak_at_us": sc(st["speak_at_us"])}
                   for st in gj["steps"]]
     g["narration_windows"] = [[sc(a), sc(b)] for a, b in gj["narration_windows"]]
-    g["captions"] = [{**c, "start_us": sc(c["start_us"]), "end_us": sc(c["end_us"])} for c in gj["captions"]]
+    g["captions"] = [{**c, "start_us": sc(c["start_us"]), "end_us": sc(c["end_us"]),
+                      "words": [{**w, "start_us": sc(w["start_us"]), "end_us": sc(w["end_us"])} for w in c.get("words", [])]}
+                     for c in gj["captions"]]
     return g
 
 

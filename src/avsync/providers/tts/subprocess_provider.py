@@ -53,7 +53,7 @@ class SubprocessTTSProvider:
         try:
             p.stdin.write(json.dumps(msg, ensure_ascii=False) + "\n")
             p.stdin.flush()
-            line = p.stdout.readline()
+            line = self._read_reply(p)
         except (BrokenPipeError, OSError) as e:
             raise ProviderError(f"공급자 워커와 통신 실패: {e}") from e
         except KeyboardInterrupt:
@@ -65,6 +65,17 @@ class SubprocessTTSProvider:
         if not reply.get("ok"):
             raise ProviderError(f"공급자 오류: {reply.get('error')}")
         return reply
+
+    @staticmethod
+    def _read_reply(p) -> str:
+        """JSON 객체 줄만 응답으로 취급한다. 라이브러리가 stdout에 섞어 쓴 소음은 stderr로 흘려 보낸다(최대 500줄)."""
+        import sys
+        for _ in range(500):
+            line = p.stdout.readline()
+            if not line or line.lstrip().startswith("{"):
+                return line
+            sys.stderr.write(f"[worker stdout] {line}")
+        raise ProviderError("워커가 JSON이 아닌 출력만 계속 보냅니다")
 
     def _ensure(self) -> None:
         if self._proc is None or self._proc.poll() is not None:

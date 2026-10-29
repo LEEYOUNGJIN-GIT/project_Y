@@ -34,6 +34,7 @@ class Project:
     profile: str
     reframe: str
     captions: str
+    caption_style: dict
     loudness_lufs: float | None
     true_peak_dbfs: float | None
     raw: dict
@@ -90,8 +91,8 @@ def load_project(path: Path) -> Project:
     if reframe not in REFRAMES:
         problems.append(f"output.reframe은 {REFRAMES} 중 하나여야 합니다: {reframe!r}")
     captions = out.get("captions", "sidecar_srt")
-    if captions not in ("none", "sidecar_srt"):
-        problems.append(f"output.captions는 none|sidecar_srt 만 지원합니다 (burn_in은 후순위): {captions!r}")
+    if captions not in ("none", "sidecar_srt", "burn_in"):
+        problems.append(f"output.captions는 none|sidecar_srt|burn_in 중 하나여야 합니다: {captions!r}")
 
     if problems:
         raise ConfigError(f"{path}: " + "; ".join(problems))
@@ -106,6 +107,7 @@ def load_project(path: Path) -> Project:
             level_db=bg.get("level_db"), duck_db=bg.get("duck_db"),
         ),
         profile=out.get("profile", "reels_9x16"), reframe=reframe, captions=captions,
+        caption_style=out.get("caption_style") or {},
         loudness_lufs=out.get("loudness_lufs"), true_peak_dbfs=out.get("true_peak_dbfs"),
         raw=data,
     )

@@ -288,14 +288,42 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
 
 # ---------------------------------------------------------------- 렌더 + manifest
 
+def caption_style(ctx: Context):
+    from .captions.ass import CaptionStyle
+    cs = {**(ctx.cfg.defaults.get("captions") or {}), **ctx.project.caption_style}
+    ff_ = cs.get("font_file")
+    prof = ctx.cfg.profile(ctx.project.profile)
+    return CaptionStyle(font_file=(ctx.project.root / ff_) if ff_ else None, font_license=str(cs.get("font_license") or ""),
+                        font_size=int(cs.get("font_size", 64)), margin_v=int(cs.get("margin_v", 420)),
+                        margin_h=int(cs.get("margin_h", 90)), width=prof["width"], height=prof["height"])
+
+
+def captions_from_fit(fit: dict) -> list:
+    from .captions.ass import Caption
+    out = []
+    for r in fit["items"]:
+        for seg in r["audio"]["segments"]:
+            a = r["at_us"]
+            out.append(Caption(a + seg["start_us"], a + seg["end_us"], seg["original"],
+                               [{"text": w["text"], "start_us": a + w["start_us"], "end_us": a + w["end_us"]}
+                                for w in seg.get("words", [])]))
+    return sorted(out, key=lambda c: c.start_us)
+
+
 def run_render(ctx: Context, timeline: dict, mix_rep: dict, fit: dict, *, preview: bool) -> dict:
     info = video_info(ctx)
     profile = ctx.cfg.profile(ctx.project.profile)
     suffix = ".preview.mp4" if preview else ".mp4"
     out = ctx.path("out", f"{ctx.project.project_id}{suffix}")
-    r = mux(ctx.ff, info, Path(mix_rep["master"]), out, profile, ctx.project.reframe)
+    burn = None
+    if ctx.project.captions == "burn_in":
+        from .captions.ass import prepare_ass_dir
+        if not ctx.ff.has_filter("ass"):
+            raise ConfigError("이 FFmpeg 빌드에는 ass 필터(libass)가 없어 burn-in 자막을 쓸 수 없습니다. output.captions: sidecar_srt를 쓰세요")
+        burn = prepare_ass_dir(ctx.path("cache", "burn"), captions_from_fit(fit), caption_style(ctx))
+    r = mux(ctx.ff, info, Path(mix_rep["master"]), out, profile, ctx.project.reframe, burn_dir=burn)
     res = {"output": str(out), "sha256": sha256_file(out), **r, "preview": preview}
-    if ctx.project.captions == "sidecar_srt":
+    if ctx.project.captions in ("sidecar_srt", "burn_in"):
         srt = out.with_suffix(".srt")
         write_srt(srt, fit["items"])
         res["srt"] = str(srt)

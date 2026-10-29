@@ -134,7 +134,9 @@ def build_guide(ctx: P.Context, *, provider_name: str | None = None, dry_run: bo
             continue
         for seg in r["audio"]["segments"]:
             captions.append({"start_us": r["at_us"] + seg["start_us"], "end_us": r["at_us"] + seg["end_us"],
-                             "text": seg["original"]})
+                             "text": seg["original"],
+                             "words": [{"text": w["text"], "start_us": r["at_us"] + w["start_us"],
+                                        "end_us": r["at_us"] + w["end_us"]} for w in seg.get("words", [])]})
     gjson = {
         "schema": 1, "created": now_iso(), "hash": ghash, "hash8": h8, "approved": approved,
         "project_id": proj.project_id, "wav": str(wav), "m4a": str(m4a), "wav_sha256": sha256_file(wav),

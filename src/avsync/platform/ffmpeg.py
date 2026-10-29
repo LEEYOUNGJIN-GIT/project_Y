@@ -49,9 +49,9 @@ class FFmpeg:
     def __init__(self, tools: Tools):
         self.tools = tools
 
-    def run(self, args, *, context: str = "ffmpeg", timeout: float | None = None) -> ProcResult:
+    def run(self, args, *, context: str = "ffmpeg", timeout: float | None = None, cwd: Path | None = None) -> ProcResult:
         base = [self.tools.ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error"]
-        return run([*base, *args], check=True, context=context, timeout=timeout)
+        return run([*base, *args], check=True, context=context, timeout=timeout, cwd=cwd)
 
     def run_raw(self, args, *, context: str = "ffmpeg", timeout: float | None = None,
                 loglevel: str = "info") -> ProcResult:

@@ -274,6 +274,11 @@ def cmd_merge(args) -> int:
     policy = args.original or (project.original if project else "duck")
     duck_under = (project.duck_under_narration_db if project and project.duck_under_narration_db is not None else
                   cfg.tone(project.tone if project else "yoga_flow_calm").get("duck_under_narration_db", -15))
+    burn_style = None
+    if args.burn_in or (project and project.captions == "burn_in"):
+        if project is None:
+            raise ConfigError("--burn-in에는 폰트 설정이 있는 --project가 필요합니다 (output.caption_style)")
+        burn_style = P.caption_style(P.make_context(Path(args.project)))
     if args.dry_run:
         _emit(args, {"would_run": "merge"}, f"[dry-run] {video.name} + {guide.name}, 오프셋 {args.offset or args.tone_at}, 원본 소리 {policy} -> {out}")
         return EXIT_OK
@@ -288,7 +293,7 @@ def cmd_merge(args) -> int:
         reframe=args.reframe or (project.reframe if project else "blur_pad"),
         profile_name=project.profile if project else "reels_9x16",
         work=(project.cache / "merge") if project else out.parent / f".avsync_merge_{out.stem}",
-        duck_under_db=duck_under)
+        duck_under_db=duck_under, burn_style=burn_style)
     rows = [f"{c['status'].upper():<5} {c['name']:<16} {c['detail']}" for c in rep["checks"]]
     rows += [f"참고: {n}" for n in rep["notes"]]
     rows.append(f"종합: {rep['status'].upper()}  출력: {rep['output']}  (영상 {rep['render']['render_mode']})")
@@ -328,21 +333,60 @@ def cmd_benchmark(args) -> int:
     if args.acceptance:
         from .config import load_yaml
         acc = (load_yaml(Path(args.acceptance)) or {}).get("acceptance_wait")
-    listen = (root / "reports" / "listening" / args.provider) if args.listen else None
+    names = [n.strip() for n in args.provider.split(",") if n.strip()]
     if args.dry_run:
-        _emit(args, {"would_run": "benchmark"}, f"[dry-run] {args.provider}: 목표 {args.targets}초 분량 합성 측정")
+        _emit(args, {"would_run": "benchmark"}, f"[dry-run] {names}: 목표 {args.targets or '(공급자 기본)'}초 분량 합성 측정")
         return EXIT_OK
-    rep = run_benchmark(cfg, ff, args.provider, voice=args.voice, targets_s=[int(x) for x in args.targets.split(",")],
-                        sentences_file=root / "benchmarks" / "sentences.txt", listen_dir=listen, acceptance=acc,
-                        report_dir=root / "reports")
-    rows = [f"공급자 {args.provider} (voice={rep['voice']}) - 측정 기기: {rep['environment']['platform']}",
-            f"콜드 스타트(기동+모델 로드+첫 합성): {rep['cold_start_s']}s"]
-    rows += [f"  {r['target_s']}초 분량: 오디오 {r['audio_s']}s / 소요 {r['wall_s']}s / RTF {r['rtf']}" for r in rep["runs"]]
-    rows.append(f"최대 메모리: {rep['peak_memory_mb']} MB ({rep['peak_memory_method']})")
-    rows += [f"판정: {v}" for v in rep["verdict"]]
-    if listen:
-        rows.append(f"청취 파일 {len(rep['listening'])}개: {listen}")
-    _emit(args, rep, "\n".join(rows))
+    rows: list[str] = []
+    reps = {}
+    for name in names:
+        net = name == "gemini"          # 네트워크 공급자는 호출이 한도를 소모하므로 기본 측정량을 줄인다
+        targets = args.targets or ("15" if net else "15,30,60")
+        limit = args.max_sentences or (6 if net else None)      # 5.7 Phase 0: 동일 대본 6문장 비교
+        listen = (root / "reports" / "listening" / name) if args.listen else None
+        rep = run_benchmark(cfg, ff, name, voice=args.voice if len(names) == 1 else None,
+                            targets_s=[int(x) for x in targets.split(",")],
+                            sentences_file=root / "benchmarks" / "sentences.txt", listen_dir=listen, acceptance=acc,
+                            report_dir=root / "reports", listen_limit=limit)
+        reps[name] = rep
+        rows += [f"공급자 {name} (voice={rep['voice']}) - 측정 기기: {rep['environment']['platform']}",
+                 f"콜드 스타트(기동+모델 로드+첫 합성): {rep['cold_start_s']}s"]
+        rows += [f"  {r['target_s']}초 분량: 오디오 {r['audio_s']}s / 소요 {r['wall_s']}s / RTF {r['rtf']}" for r in rep["runs"]]
+        rows.append(f"최대 메모리: {rep['peak_memory_mb']} MB ({rep['peak_memory_method']})")
+        rows += [f"판정: {v}" for v in rep["verdict"]]
+        if listen:
+            rows.append(f"청취 파일 {len(rep['listening'])}개: {listen}")
+    _emit(args, reps if len(names) > 1 else reps[names[0]], "\n".join(rows))
+    return EXIT_OK
+
+
+def cmd_gemini(args) -> int:
+    from .domain.manifest import now_iso, write_json
+    from .providers.tts.gemini_cli import find_cli
+    cfg = load_config()
+    ack = cfg.model_cache() / "gemini_free_ack.json"
+    if args.gcmd == "status":
+        try:
+            cmd = find_cli(((cfg.defaults.get("providers") or {}).get("gemini") or {}).get("cli_path"))
+            cli_txt = f"gemini-api: {cmd[0]}"
+        except Exception as e:  # noqa: BLE001
+            cli_txt = f"gemini-api: 없음 ({e})"
+        _emit(args, {"ack": ack.is_file()}, f"{cli_txt}\n무료 키 확인: {'완료 ' + read_json(ack)['acknowledged_at'] if ack.is_file() else '없음 (avsync gemini confirm-free --yes)'}\n"
+              "키는 이 도구가 읽지 않습니다. `gemini-api whoami`로 CLI의 인증 상태를 확인하세요.")
+        return EXIT_OK
+    if not args.yes:
+        print("Gemini 무료 등급 사용 확인 (지시서 5.7)\n"
+              "- 사용할 API 키는 결제(Billing)가 연결되지 않은 프로젝트에서 발급한 것이어야 합니다.\n"
+              "- 무료 등급의 입력은 제품 개선에 쓰일 수 있습니다. 전송되는 것은 script.yaml의 대본 문장뿐입니다.\n"
+              "- 한도를 넘거나 결제 연결 프로젝트의 키를 쓰면 과금될 수 있으며, 이 도구는 결제 상태를 알 수 없습니다.\n"
+              "위 내용을 확인했다면 `avsync gemini confirm-free --yes`를 실행하세요.", file=sys.stderr)
+        return EXIT_ERROR
+    write_json(ack, {"acknowledged_at": now_iso(), "statement": "결제 미연결 프로젝트의 키를 사용함을 사용자가 확인함"})
+    log = cfg.root / "reports" / "gemini_ack.log"
+    log.parent.mkdir(exist_ok=True)
+    with log.open("a", encoding="utf-8") as f:
+        f.write(f"{now_iso()} 결제 미연결 프로젝트의 키 사용 확인 (source_audit 기록용)\n")
+    _emit(args, {"ack": True}, f"확인 기록: {ack}")
     return EXIT_OK
 
 
@@ -403,6 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--shot-hash", help="촬영에 쓴 가이드의 해시 앞 8자리. 다르면 재촬영 필요 오류")
     sp.add_argument("--preview", action="store_true", help="미승인 가이드 허용")
     sp.add_argument("--reframe", choices=["none", "blur_pad", "crop_center", "pad_solid"])
+    sp.add_argument("--burn-in", action="store_true", help="자막을 영상에 입힘 (project.yaml의 output.caption_style 폰트·라이선스 필요)")
     sp.add_argument("--out")
     sp = add("align", cmd_align, "[audio-first] 영상 소리에서 가이드 시작 톤을 찾아 오프셋 제안")
     sp.add_argument("--video", required=True)
@@ -424,11 +469,18 @@ def build_parser() -> argparse.ArgumentParser:
     bp = sub.add_parser("benchmark", help="벤치마크").add_subparsers(dest="bcmd", required=True)
     sp = bp.add_parser("tts", parents=[common], help="TTS RTF/메모리/콜드 스타트")
     sp.set_defaults(func=cmd_benchmark)
-    sp.add_argument("--provider", required=True)
-    sp.add_argument("--voice")
-    sp.add_argument("--targets", default="15,30,60")
+    sp.add_argument("--provider", required=True, help="공급자 이름. 쉼표로 여러 개 (예: kokoro,gemini)")
+    sp.add_argument("--voice", help="공급자가 하나일 때의 음색")
+    sp.add_argument("--targets", help="측정할 분량(초) 목록. 기본 15,30,60 (gemini는 15)")
+    sp.add_argument("--max-sentences", type=int, help="청취용 문장 수 제한 (gemini 기본 6)")
     sp.add_argument("--listen", action="store_true", help="청취 평가용 문장 WAV를 reports/listening/에 출력")
     sp.add_argument("--acceptance", help="acceptance_wait가 적힌 YAML (12.1)")
+    gp = sub.add_parser("gemini", help="Gemini TTS 설정").add_subparsers(dest="gcmd", required=True)
+    sp = gp.add_parser("confirm-free", parents=[common], help="결제 미연결 프로젝트의 키임을 확인(5.7 free_only)")
+    sp.set_defaults(func=cmd_gemini)
+    sp.add_argument("--yes", action="store_true")
+    sp = gp.add_parser("status", parents=[common], help="CLI·확인 상태")
+    sp.set_defaults(func=cmd_gemini)
     bg = sub.add_parser("bgm", help="BGM 라이브러리").add_subparsers(dest="bgcmd", required=True)
     sp = bg.add_parser("import", parents=[common], help="음원 등록")
     sp.set_defaults(func=cmd_bgm_import)

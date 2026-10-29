@@ -23,14 +23,15 @@ def md5_video(ff, path: Path) -> str:
 
 
 def write_project(root: Path, *, video=None, guide=False, script: str, bgm: Path | None = None, extra_audio="",
-                  guide_yaml: str | None = None):
+                  guide_yaml: str | None = None, output: str | None = None):
     root.mkdir(parents=True, exist_ok=True)
     inp = "  guide: guide.yaml\n" if guide else f"  video: {video}\n"
     bg = (f"  bgm: {{source: imported, path: '{bgm}', license_note: 'test tone', duck_db: 6.0}}\n" if bgm
           else "  bgm: {source: none}\n")
     (root / "project.yaml").write_text(
         f"schema_version: 3\nproject_id: t1\ninput:\n{inp}  script: script.yaml\ntone: yoga_flow_calm\n"
-        f"audio:\n  original: duck\n{extra_audio}{bg}output: {{profile: reels_9x16, reframe: blur_pad, captions: sidecar_srt}}\n",
+        f"audio:\n  original: duck\n{extra_audio}{bg}"
+        f"output: {output or '{profile: reels_9x16, reframe: blur_pad, captions: sidecar_srt}'}\n",
         encoding="utf-8")
     (root / "script.yaml").write_text(script, encoding="utf-8")
     if guide_yaml:

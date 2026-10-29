@@ -1,6 +1,7 @@
 """SubprocessTTSProvider 프로토콜 시험용 워커 (JSON Lines). 실제 Kokoro 워커와 같은 메시지 형식을 쓴다."""
 import json
 import math
+import os
 import sys
 import wave
 
@@ -19,6 +20,9 @@ def main() -> int:
         elif op == "synthesize":
             if msg["text"] == "__CRASH__":
                 sys.exit(3)
+            if msg["text"] == "__NOISE__":
+                print("Downloading en-core-web-sm ...")          # 라이브러리가 stdout에 쓰는 상황
+                sys.stdout.flush()
             if not msg.get("voice"):
                 reply = {"ok": False, "error": "voice_id가 지정되지 않았습니다"}
             else:

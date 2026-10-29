@@ -8,15 +8,28 @@ pipeline(text, voice=, speed=) -> Result가 (graphemes, phonemes, audio)로 풀�
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 SR = 24000
 
 
+def _claim_protocol_channel():
+    """프로토콜 전용 채널을 복제해 확보하고, 이후 fd 1로 나가는 모든 출력을 stderr로 돌린다.
+
+    CI(Windows)에서 misaki가 첫 합성 때 spaCy 모델을 자동 설치하며 stdout에 출력해 JSON 프로토콜이 깨졌다.
+    라이브러리 print뿐 아니라 하위 프로세스(uv pip 등)의 출력도 fd 수준에서 막아야 한다.
+    """
+    proto = os.fdopen(os.dup(1), "w", encoding="utf-8", buffering=1, newline="\n")
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    return proto
+
+
 def main() -> int:
     # Windows 기본 입출력 인코딩은 시스템 코드페이지다. 한글 메시지·IPA 발음 표기를 위해 UTF-8로 고정한다.
-    for stream in (sys.stdin, sys.stdout):
-        stream.reconfigure(encoding="utf-8")
+    sys.stdin.reconfigure(encoding="utf-8")
+    out = _claim_protocol_channel()
     pipeline = None
     version = "unknown"
     for raw in sys.stdin:
@@ -31,7 +44,7 @@ def main() -> int:
                     pass
                 reply = {"ok": True, "capabilities": {
                     "name": "kokoro", "version": version, "languages": ["en-US"], "speed": True,
-                    "word_timestamps": False, "emotion": False, "sample_rate": SR, "cpu": True,
+                    "word_timestamps": True, "emotion": False, "sample_rate": SR, "cpu": True,
                     "pronunciation_mode": "phoneme_markup", "production_ok": True,
                 }}
             elif op == "synthesize":
@@ -44,22 +57,33 @@ def main() -> int:
                 if not voice:
                     raise ValueError("voice_id가 지정되지 않았습니다. 청취 후 script.yaml의 voice.voice_id를 정하세요.")
                 chunks = []
-                for _, _, a in pipeline(msg["text"], voice=voice, speed=float(msg["speed"])):
+                words = []
+                offset = 0.0                     # 청크가 이어 붙는 위치(초). 토큰 시각은 청크 기준 상대값이다
+                for res in pipeline(msg["text"], voice=voice, speed=float(msg["speed"])):
+                    a = res.audio
                     if a is None:
                         continue
-                    chunks.append(a.detach().cpu().numpy() if hasattr(a, "detach") else np.asarray(a))
+                    arr = a.detach().cpu().numpy() if hasattr(a, "detach") else np.asarray(a)
+                    # kokoro 0.9.4 English path: join_timestamps()가 모델 예측 길이로 start_ts/end_ts(초)를 채운다.
+                    # 강제 정렬이 아니라 예측값이므로 어긋날 수 있다.
+                    for t in (getattr(res, "tokens", None) or []):
+                        st, en = getattr(t, "start_ts", None), getattr(t, "end_ts", None)
+                        if st is not None and en is not None and any(ch.isalnum() for ch in t.text):
+                            words.append({"text": t.text, "start": offset + float(st), "end": offset + float(en)})
+                    chunks.append(arr)
+                    offset += len(arr) / SR
                 if not chunks:
                     raise ValueError("합성 결과가 비었습니다")
                 sf.write(msg["out"], np.concatenate(chunks), SR, subtype="PCM_16")
-                reply = {"ok": True, "sample_rate": SR, "meta": {"voice": voice}}
+                reply = {"ok": True, "sample_rate": SR, "meta": {"voice": voice, "words": words}}
             elif op == "bye":
                 return 0
             else:
                 reply = {"ok": False, "error": f"알 수 없는 op: {op}"}
         except Exception as e:  # noqa: BLE001 - 워커 경계에서 모든 오류를 JSON으로 돌려준다
             reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        out.write(json.dumps(reply, ensure_ascii=False) + "\n")
+        out.flush()
     return 0
 
 

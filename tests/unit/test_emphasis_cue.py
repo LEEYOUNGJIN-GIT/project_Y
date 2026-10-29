@@ -65,3 +65,28 @@ def test_cue_speed_capped_by_max_speed(tmp_path):
     syn = make(tmp_path, fake, pron={"Ekam": "x"}, cue_speed=1.5, max_speed=1.06)
     syn.synth_line(Line(id="a", text="Ekam."), 0.95)
     assert fake.speeds == [1.06]
+
+
+def test_word_timestamps_are_shifted_by_trim_and_mapped_to_originals(tmp_path):
+    fake = FakeProvider(words=True, lead_ms=100)
+    syn = Synthesizer(fake, tmp_path / "c", voice_id="v", lang="en-US", pronunciations={"Ekam": "EH-kum"},
+                      sentence_pause_ms=450)
+    la = syn.synth_line(Line(id="a", text="Ekam. Inhale up."), 1.0)
+    s0, s1 = la.segments
+    # 첫 문장: 제공 단어 'ehkum.'(발음 치환) -> 원문 'Ekam'으로 복원, 시작은 트림 후 앞 여유(20ms)
+    assert [w["text"] for w in s0.words] == ["Ekam"]
+    assert s0.words[0]["start_us"] == pytest.approx(20_000, abs=300)
+    # 둘째 문장 단어는 문장 시작(= 첫 문장 끝 + 450ms 무음) 이후에 놓인다
+    assert [w["text"] for w in s1.words] == ["Inhale", "up"]
+    assert s1.words[0]["start_us"] >= s1.start_us and s1.words[-1]["end_us"] <= s1.end_us
+    assert s1.words[0]["end_us"] < s1.words[1]["start_us"]
+    # 캐시 적중 시에도 단어가 보존된다
+    again = Synthesizer(fake, tmp_path / "c", voice_id="v", lang="en-US", pronunciations={"Ekam": "EH-kum"},
+                        sentence_pause_ms=450).synth_line(Line(id="a", text="Ekam. Inhale up."), 1.0)
+    assert again.from_cache and again.segments[1].words == s1.words
+
+
+def test_no_words_when_provider_has_none(tmp_path):
+    la = Synthesizer(FakeProvider(), tmp_path / "c", voice_id="v", lang="en-US", pronunciations={},
+                     sentence_pause_ms=450).synth_line(Line(id="a", text="Hello there."), 1.0)
+    assert la.segments[0].words == []

@@ -60,7 +60,7 @@ def _peak_mb(provider) -> tuple[float | None, str]:
 
 def run_benchmark(cfg: Config, ff: FFmpeg, provider_name: str, *, voice: str | None, targets_s: list[int],
                   sentences_file: Path, listen_dir: Path | None, pron: dict[str, str] | None = None,
-                  acceptance: dict | None = None, report_dir: Path) -> dict:
+                  acceptance: dict | None = None, report_dir: Path, listen_limit: int | None = None) -> dict:
     sentences = [s.strip() for s in sentences_file.read_text(encoding="utf-8").splitlines() if s.strip()]
     provider = create_tts_provider(provider_name, cfg, ff)
     tmp = Path(tempfile.mkdtemp(prefix="avsync_bench_"))
@@ -98,7 +98,7 @@ def run_benchmark(cfg: Config, ff: FFmpeg, provider_name: str, *, voice: str | N
         listening = []
         if listen_dir:
             listen_dir.mkdir(parents=True, exist_ok=True)
-            for k, sent in enumerate(sentences, 1):
+            for k, sent in enumerate(sentences[:listen_limit] if listen_limit else sentences, 1):
                 parts = []
                 for j, ss in enumerate(split_sentences(sent)):
                     _, r = synth(ss, f"L{k}_{j}")
@@ -129,7 +129,8 @@ def run_benchmark(cfg: Config, ff: FFmpeg, provider_name: str, *, voice: str | N
             "cold_start_s": round(cold_total, 2), "first_request_s": round(first_s, 2),
             "provider_reported_cold_start_s": getattr(provider, "cold_start_s", None),
             "runs": runs, "peak_memory_mb": round(peak, 1) if peak else None, "peak_memory_method": how,
-            "listening": listening, "listening_sentences": len(sentences),
+            "listening": listening, "listening_sentences": len(listening),
+            "network_provider": caps.network,
             "acceptance": acceptance, "verdict": _verdict(runs, cold_total, acceptance, caps.production_ok),
         }
         write_json(report_dir / f"benchmark_{provider_name}.json", rep)
