@@ -202,6 +202,74 @@ def loudness_experiment(proj: Path) -> None:
                 ff.run(["-i", str(narr), "-af", flt, "-c:a", "pcm_s16le", str(n)], context="내레이션 압축 실험")
             report(f"내레이션 {label}", [n, *rest], f"narr_{i}.wav" if flt else "narr_none.wav")
         report("내레이션 압축 없음, BGM 없음(게이팅 영향 확인)", [p for p in (narr, cue) if p is not None], None)
+        # BGM 레벨 스윕: 게이팅 가설 확인. bgm_ducked를 dB만큼 키운 뒤 합산 (현재 BGM은 내레이션보다 14.5 dB 낮다)
+        lines.append("### BGM 레벨 스윕 (bgm_ducked를 +x dB; 예산 4 dB 고정) / 목표를 맞추는 데 필요한 리미터 예산")
+        for i, up in enumerate((0, 4, 8, 12)):
+            b = bgm
+            if up:
+                b = work / f"bgm_up{up}.wav"
+                ff.run(["-i", str(bgm), "-af", f"volume={up}dB", "-c:a", "pcm_s16le", str(b)], context="BGM 레벨 실험")
+            pre = work / f"pre_up{up}.wav"
+            M.sum_stems(ff, [narr, b, *([cue] if cue else [])], pre, work)
+            m = measure_ebur128(ff, pre)
+            need = (-14.0 - m.integrated) - (-1.0 - m.true_peak)       # 목표 음량 이득 - 한도까지의 여유 = 필요한 리미터 예산
+            res = master_normalize(ff, pre, work / "out.wav", target_i=-14.0, target_tp=-1.0, limiter_budget_db=4.0)
+            lines.append(f"- BGM 내레이션 대비 {-14.5 + up:+.1f} dB: 합산 {m.integrated:.1f} LUFS/{m.true_peak:.1f} dBTP, "
+                         f"필요 예산 {need:.1f} dB, 예산 4 dB 결과 {res['output_i']:.1f} LUFS")
+    summary("\n".join(lines))
+
+
+ALIGN_CASES = [
+    # (라벨, 반향 필터, 소음 진폭)
+    ("지연만(깨끗)", None, 0.0),
+    ("방 반향 + 약한 소음", "aecho=0.8:0.6:40|90|160:0.35|0.25|0.15,lowpass=f=6000", 0.002),
+    ("방 반향 + 중간 소음", "aecho=0.8:0.6:40|90|160:0.35|0.25|0.15,lowpass=f=6000", 0.006),
+    ("긴 반향 + 큰 소음", "aecho=0.8:0.7:80|180|320:0.5|0.35|0.25,lowpass=f=5000", 0.02),
+]
+
+
+def align_experiment(proj: Path) -> None:
+    """실제 Kokoro 가이드를 휴대폰이 스피커 소리를 녹음한 것처럼 열화시켜 시작 톤을 찾는 `align`을 시험한다.
+
+    이전에는 합성 믹스로만 검증했다. 여기서도 사람이 말하는 소리나 실제 휴대폰 마이크는 없으므로 실녹음 검증은 아니다.
+    """
+    import subprocess
+
+    from avsync.guide.align import find_tone
+    from avsync.platform.ffmpeg import FFmpeg, Tools
+
+    gj = sorted((proj / "outputs" / "guide").glob("guide_*.json"))
+    if not gj:
+        return
+    meta = json.loads(gj[-1].read_text(encoding="utf-8"))
+    wav = Path(meta["wav"])
+    if not wav.is_file():
+        wav = gj[-1].with_suffix(".wav")
+    ff = FFmpeg(Tools(Path(shutil.which("ffmpeg")), Path(shutil.which("ffprobe")), True))
+    delay_s = 3.24
+    dur = meta["total_us"] / 1e6 + delay_s + 1.0
+    work = Path(tempfile.mkdtemp(prefix="avsync_align_"))
+    expect_us = int(delay_s * 1e6) + meta["tone_at_us"]
+    lines = [f"### align 시험: 가이드 WAV를 {delay_s}초 지연 + 열화해 영상 소리로 만든 뒤 시작 톤 탐색 (실제 톤 위치 {expect_us / 1e6:.3f}s)"]
+    for i, (label, room, noise) in enumerate(ALIGN_CASES):
+        chain = f"[1:a]aformat=channel_layouts=mono,aresample=48000,adelay={int(delay_s * 1000)}:all=1" + (f",{room}" if room else "") + ",volume=-6dB[g]"
+        graph = chain + (f";anoisesrc=color=pink:amplitude={noise}:d={dur:.1f}:r=48000,aformat=channel_layouts=mono[n];"
+                         "[g][n]amix=inputs=2:normalize=0:duration=longest[a]" if noise else ";[g]anull[a]")
+        out = work / f"rec_{i}.mp4"
+        r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c=black:s=320x568:r=30:d={dur:.1f}",
+                            "-i", str(wav), "-filter_complex", graph, "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                            "-c:a", "aac", "-t", f"{dur:.1f}", str(out)], capture_output=True, text=True, encoding="utf-8")
+        if r.returncode != 0:
+            lines.append(f"- {label}: 녹음 합성 실패 {r.stderr[-200:]}")
+            continue
+        hits = find_tone(ff, out, work / f"w{i}", freq_hz=meta["tone_hz"], tone_ms=meta["tone_ms"])
+        if not hits:
+            lines.append(f"- {label}: **톤을 찾지 못함**")
+            continue
+        best = hits[0]
+        err = (best.time_us - expect_us) / 1000
+        lines.append(f"- {label}: 후보 {len(hits)}개, 1순위 {best.time_us / 1e6:.3f}s (오차 {err:+.0f} ms), 점수 {best.score:.1f}, "
+                     f"톤 비율 {best.tonality:.2f}, 대비 {best.contrast_db:.1f} dB")
     summary("\n".join(lines))
 
 
@@ -263,10 +331,11 @@ def main_() -> int:
             summary("\n".join(lines))
     if (proj / "manifests" / "mix_report.json").is_file():
         mix_diagnostics(proj)
-        try:
-            loudness_experiment(proj)
-        except Exception as e:  # noqa: BLE001 - 실험은 부가 산출물
-            summary(f"### 음량 실험 실패: {type(e).__name__}: {e}")
+        for exp in (loudness_experiment, align_experiment):
+            try:
+                exp(proj)
+            except Exception as e:  # noqa: BLE001 - 실험은 부가 산출물
+                summary(f"### {exp.__name__} 실패: {type(e).__name__}: {e}")
     summary(f"### 샘플 가이드 합성 종료 코드: {rc} (0=성공, 2=길이 초과/겹침 보고)")
     return 0 if rc in (0, 2) else rc
 
