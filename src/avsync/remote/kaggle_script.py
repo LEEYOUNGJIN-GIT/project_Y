@@ -10,6 +10,8 @@ import json
 
 TEMPLATE = r'''# avsync가 생성한 Kaggle 커널 스크립트. 계획 해시: __PLAN_HASH__
 import json, os, pathlib, subprocess, sys, time, traceback, urllib.parse, urllib.request
+for _s in (sys.stdout, sys.stderr):
+    _s.reconfigure(encoding="utf-8", errors="replace")      # 한글 로그가 비-UTF-8 콘솔에서 스크립트를 죽이지 않게
 
 PLAN = json.loads(__PLAN_JSON__)
 BASE = os.environ.get("AVSYNC_ACE_URL", "http://127.0.0.1:8001")
