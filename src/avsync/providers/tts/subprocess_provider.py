@@ -47,6 +47,18 @@ class SubprocessTTSProvider:
         self._caps = TTSCapabilities(**reply["capabilities"])
         self.cold_start_s = time.perf_counter() - t0
 
+    def _mark_dead(self) -> int | None:
+        """워커가 죽었음을 감지하면 즉시 회수하고 핸들을 버린다. EOF를 본 직후에는 자식이 아직 회수되지 않아
+        poll()이 None일 수 있어(Windows CI에서 재현) 다음 호출이 죽은 파이프에 쓰는 경쟁 조건이 생긴다."""
+        p, self._proc = self._proc, None
+        if p is None:
+            return None
+        try:
+            return p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            kill_tree(p)
+            return p.poll()
+
     def _call(self, msg: dict) -> dict:
         p = self._proc
         assert p is not None and p.stdin is not None and p.stdout is not None
@@ -55,12 +67,14 @@ class SubprocessTTSProvider:
             p.stdin.flush()
             line = self._read_reply(p)
         except (BrokenPipeError, OSError) as e:
-            raise ProviderError(f"공급자 워커와 통신 실패: {e}") from e
+            code = self._mark_dead()
+            raise ProviderError(f"공급자 워커와 통신 실패(종료 코드 {code}): {e}") from e
         except KeyboardInterrupt:
             kill_tree(p)
             raise
         if not line:
-            raise ProviderError(f"공급자 워커가 응답 없이 종료됨 (종료 코드 {p.poll()}). 위 stderr 출력을 확인하세요.")
+            code = self._mark_dead()
+            raise ProviderError(f"공급자 워커가 응답 없이 종료됨 (종료 코드 {code}). 위 stderr 출력을 확인하세요.")
         reply = json.loads(line)
         if not reply.get("ok"):
             raise ProviderError(f"공급자 오류: {reply.get('error')}")
@@ -96,6 +110,14 @@ class SubprocessTTSProvider:
         pcm = read_wav(request.out_path)
         return TTSResult(request.out_path, int(reply.get("sample_rate", pcm.rate)), pcm.duration_us,
                          reply.get("meta", {}))
+
+    def stats(self) -> dict | None:
+        """워커가 보고하는 자원 사용량(최대 메모리 등). 지원하지 않는 워커면 None."""
+        self._ensure()
+        try:
+            return self._call({"op": "stats"})
+        except ProviderError:
+            return None
 
     def close(self) -> None:
         p = self._proc

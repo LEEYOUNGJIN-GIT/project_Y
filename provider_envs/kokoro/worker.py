@@ -14,6 +14,35 @@ import sys
 SR = 24000
 
 
+def _peak_rss_mb():
+    """이 프로세스의 최대 상주 메모리(MB). Windows의 venv python.exe는 실제 인터프리터를 자식으로 띄우는 런처라
+    부모가 PID로 재면 런처(수 MB)를 재게 된다. 그래서 워커가 자기 값을 직접 보고한다."""
+    try:
+        import resource
+        v = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return v / (1024 ** 2 if sys.platform == "darwin" else 1024)
+    except ImportError:
+        pass
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PMC(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                        ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+        k32, ps = ctypes.windll.kernel32, ctypes.windll.psapi
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        ps.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+        pmc = PMC()
+        pmc.cb = ctypes.sizeof(PMC)
+        return pmc.PeakWorkingSetSize / 1024 ** 2 if ps.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _claim_protocol_channel():
     """프로토콜 전용 채널을 복제해 확보하고, 이후 fd 1로 나가는 모든 출력을 stderr로 돌린다.
 
@@ -76,6 +105,8 @@ def main() -> int:
                     raise ValueError("합성 결과가 비었습니다")
                 sf.write(msg["out"], np.concatenate(chunks), SR, subtype="PCM_16")
                 reply = {"ok": True, "sample_rate": SR, "meta": {"voice": voice, "words": words}}
+            elif op == "stats":
+                reply = {"ok": True, "peak_rss_mb": _peak_rss_mb()}
             elif op == "bye":
                 return 0
             else:

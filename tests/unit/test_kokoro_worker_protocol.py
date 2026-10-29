@@ -44,3 +44,11 @@ def test_synthesis_errors_come_back_as_json_and_worker_keeps_running():
     replies = [json.loads(l) for l in p.stdout.splitlines() if l.strip()]
     assert replies[0]["ok"] is False and replies[0]["error"]
     assert replies[1]["ok"] is True                         # 오류 뒤에도 워커가 살아 있다
+
+
+def test_stats_op_reports_plausible_peak_memory():
+    """Windows CI 회귀: 런처 PID로 재면 3.9MB가 나왔다. 워커 자체 보고는 파이썬 인터프리터 수준(수십 MB 이상)이어야 한다."""
+    p = run_py(f"import runpy; runpy.run_path(r'{WORKER}', run_name='__main__')",
+               json.dumps({"op": "stats"}) + "\n" + json.dumps({"op": "bye"}) + "\n")
+    reply = json.loads([l for l in p.stdout.splitlines() if l.strip()][0])
+    assert reply["ok"] is True and reply["peak_rss_mb"] is not None and reply["peak_rss_mb"] > 8

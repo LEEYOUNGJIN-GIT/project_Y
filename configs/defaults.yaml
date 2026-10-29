@@ -41,3 +41,10 @@ captions:
   font_size: 64
   margin_v: 420
   margin_h: 90
+
+# 원격 GPU (6장). 토큰은 kaggle CLI의 표준 위치(KAGGLE_API_TOKEN 또는 ~/.kaggle)에 두며 이 도구는 읽지 않는다.
+remote:
+  kaggle:
+    owner: null          # Kaggle 사용자명 (커널 id = owner/slug)
+    accelerator: null    # 예: NvidiaTeslaT4. null이면 Kaggle 기본 GPU. 한도·GPU 종류는 하드코딩하지 않는다
+    cli_path: null

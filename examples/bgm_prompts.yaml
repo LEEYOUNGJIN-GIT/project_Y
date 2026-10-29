@@ -1,0 +1,9 @@
+# 6.4 형식. 먼저 duration_s 10-15, 곡 2-3개로 시험 실행하세요.
+tracks:
+  - id: calm_pad_01
+    duration_s: 15
+    prompt: "calm ambient instrumental, warm pad, soft plucks, slow tempo, no vocals, spacious"
+    bpm_hint: [70, 85]
+    vocals: forbidden
+    seeds: [11, 12]
+avoid: [artist_names, song_titles, strong_midrange_lead]

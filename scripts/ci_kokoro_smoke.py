@@ -56,6 +56,15 @@ def main_() -> int:
         fit = proj / "manifests" / "fit_report.json"
         if fit.is_file():
             shutil.copy(fit, OUT / "fit_report.json")
+            rep = json.loads(fit.read_text(encoding="utf-8"))
+            lines = ["### Kokoro 단어 타임스탬프 진단 (공급자 보고: word_timestamps=%s)" % rep["provider"]["word_timestamps"]]
+            for r in rep["items"][:4]:
+                for seg in r["audio"]["segments"]:
+                    ws = " ".join(f"{w['text']}[{w['start_us'] / 1e6:.2f}-{w['end_us'] / 1e6:.2f}]" for w in seg["words"])
+                    lines.append(f"- {r['id']} \"{seg['original']}\" ({seg['start_us'] / 1e6:.2f}-{seg['end_us'] / 1e6:.2f}s) words: {ws or '(없음)'}")
+            lines.append("- 발음 사전 적용 문장: " + "; ".join(
+                f"{seg['original']} -> {seg['spoken']}" for r in rep["items"][:3] for seg in r["audio"]["segments"] if seg["spoken"] != seg["normalized"]))
+            summary("\n".join(lines))
     summary(f"### 샘플 가이드 합성 종료 코드: {rc} (0=성공, 2=길이 초과/겹침 보고)")
     return 0 if rc in (0, 2) else rc
 

@@ -18,39 +18,16 @@ from .tts.normalize import apply_pronunciations, split_sentences
 
 
 def _peak_mb(provider) -> tuple[float | None, str]:
-    """측정할 수 있는 만큼만 보고한다. 측정 방식을 함께 돌려준다."""
-    proc = getattr(provider, "_proc", None)
-    if proc is not None:
-        pid = proc.pid
-        if os.name != "nt":
-            try:
-                for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-                    if line.startswith("VmHWM:"):
-                        return int(line.split()[1]) / 1024, "워커 프로세스 VmHWM"
-            except OSError:
-                pass
-        else:
-            try:
-                import ctypes
-                from ctypes import wintypes
+    """측정할 수 있는 만큼만 보고한다. 측정 방식을 함께 돌려준다.
 
-                class PMC(ctypes.Structure):
-                    _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
-                                ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
-                                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                                ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
-                k32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
-                h = k32.OpenProcess(0x1000 | 0x0400, False, pid)   # QUERY_LIMITED | QUERY_INFORMATION
-                pmc = PMC()
-                pmc.cb = ctypes.sizeof(PMC)
-                ok = psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb)
-                k32.CloseHandle(h)
-                if ok:
-                    return pmc.PeakWorkingSetSize / 1024 ** 2, "워커 프로세스 PeakWorkingSetSize"
-            except Exception:  # noqa: BLE001
-                pass
-        return None, "측정 실패"
+    워커 프로세스가 있으면 워커가 자기 값을 보고하게 한다(Windows venv의 python.exe 런처 문제로 PID 측정은 틀린다).
+    """
+    stats = getattr(provider, "stats", None)
+    if callable(stats):
+        st = stats()
+        if st and st.get("peak_rss_mb"):
+            return float(st["peak_rss_mb"]), "워커 자체 보고(최대 상주 메모리)"
+        return None, "워커가 메모리 보고를 지원하지 않음"
     try:
         import resource
         return resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024, "자식 프로세스 최대 RSS(ffmpeg 등 포함)"

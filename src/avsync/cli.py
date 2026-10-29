@@ -390,6 +390,75 @@ def cmd_gemini(args) -> int:
     return EXIT_OK
 
 
+def _remote_dirs(cfg):
+    from .remote.kaggle import RemoteDirs
+    return RemoteDirs(cfg.root / "library" / "bgm" / "_remote")
+
+
+def cmd_bgm_remote(args) -> int:
+    from .remote import kaggle as K
+    from .remote.plan import load_plan
+    cfg = load_config()
+    dirs = _remote_dirs(cfg)
+    rc = (cfg.defaults.get("remote") or {}).get("kaggle") or {}
+    cmd = args.bgcmd
+    if cmd == "remote-plan":
+        plan = load_plan(Path(args.prompts))
+        rows = [f"{t.id:<16} {t.duration_s:>5.0f}s  시드 {len(t.seeds)}개  {t.prompt[:70]}" for t in plan.tracks]
+        rows.append(f"작업 {plan.jobs}개, 생성 오디오 합계 {plan.total_audio_s:.0f}초, 계획 해시 {plan.hash()}")
+        state = read_json(dirs.state) if dirs.state.is_file() else {}
+        if (plan.jobs > 3 or any(t.duration_s > 30 for t in plan.tracks)) and not state.get("fetched"):
+            rows.append("권장: 먼저 곡 2-3개(10-15초)로 시험 실행해 소요 시간과 한도 소모를 기록한 뒤 일괄 작업 크기를 정하세요 (6.3). "
+                        "이 스크립트는 Kaggle에서 한 번도 실행된 적이 없습니다.")
+        _emit(args, {"jobs": plan.jobs, "hash": plan.hash(), "total_audio_s": plan.total_audio_s}, "\n".join(rows))
+        return EXIT_OK
+    if cmd == "remote-run":
+        plan = load_plan(Path(args.prompts))
+        owner = args.owner or rc.get("owner")
+        if not owner:
+            raise ConfigError("Kaggle 사용자명이 필요합니다: --owner 또는 configs/defaults.yaml의 remote.kaggle.owner")
+        cli = None if args.dry_run else K.KaggleCli(K.find_kaggle(rc.get("cli_path")))
+        res = K.remote_run(plan, dirs, cli, owner=owner, accelerator=args.accelerator or rc.get("accelerator"),
+                           revision=args.revision, dry_run=args.dry_run)
+        _emit(args, res, (f"[dry-run] 커널 폴더 {res['kernel_dir']}\n  {' '.join(res['command'])}\n  메타: {json.dumps(res['kernel'], ensure_ascii=False)}"
+                          if res["dry_run"] else f"푸시 완료: {res['ref']}\n다음: avsync bgm remote-status"))
+        return EXIT_OK
+    cli = K.KaggleCli(K.find_kaggle(rc.get("cli_path")))
+    ff = FFmpeg(find_tools(cfg))
+    if cmd == "remote-status":
+        res = K.remote_status(dirs, cli)
+        _emit(args, res, f"{res['ref']}: {res['status']}" + (f"\n실패 메시지: {res['failure']}" if res["failure"] else ""))
+        return EXIT_CONTENT if res["status"] in ("error", "cancelled") else EXIT_OK
+    if cmd == "remote-fetch":
+        res = K.remote_fetch(dirs, cli, ff, cfg.gates)
+        rows = [f"등록 {len(res['accepted'])}곡 / 폐기 {len(res['discarded'])}곡 / 생성 실패 {len(res['failed'])}곡 (결과 {res['results']}개)"]
+        rows += [f"  등록: {a['name']} -> {Path(a['path']).name}" + (f" [경고: {'; '.join(a['warnings'])}]" if a["warnings"] else "") for a in res["accepted"]]
+        rows += [f"  폐기: {d['name']}: {'; '.join(d['reasons'])}" for d in res["discarded"]]
+        rows += [f"  실패: {f['name']}: {f['error']}" for f in res["failed"]]
+        if not res["complete"]:
+            rows.append("일부만 완료된 결과입니다. 남은 곡은 계획에서 제외하고 다시 remote-run 하세요.")
+        _emit(args, res, "\n".join(rows))
+        return EXIT_OK
+    raise ConfigError(f"알 수 없는 명령: {cmd}")
+
+
+def cmd_bgm_check(args) -> int:
+    from .audio.loudness import measure_ebur128, measure_peak_db
+    from .audio.vocals import vocal_score
+    cfg = load_config()
+    ff = FFmpeg(find_tools(cfg))
+    f = Path(args.file)
+    voc = vocal_score(ff, f, Path(tempfile.mkdtemp(prefix="avsync_vocal_")))
+    ld, pk = measure_ebur128(ff, f), measure_peak_db(ff, f)
+    g = cfg.gates["bgm"]
+    verdict = ("보컬 가능성 높음(폐기 후보)" if voc.score >= g["vocal_discard_score"] else
+               "불확실(청취 필요)" if voc.score >= g["vocal_unknown_score"] else "보컬 가능성 낮음")
+    res = {"vocal": voc.as_dict(), "integrated_lufs": ld.integrated, "peak_dbfs": pk, "verdict": verdict}
+    _emit(args, res, f"보컬 휴리스틱 {voc.score:.2f} -> {verdict}\n통합 {ld.integrated} LUFS, 피크 {pk} dBFS\n"
+          "주의: 이 점수는 ML 판정이 아닌 휴리스틱이며 규칙적인 3-8Hz 리듬 악기를 오탐할 수 있습니다. 최종 판단은 청취입니다.")
+    return EXIT_OK
+
+
 def cmd_bgm_import(args) -> int:
     from .bgmlib import import_bgm
     cfg = load_config()
@@ -482,6 +551,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp = gp.add_parser("status", parents=[common], help="CLI·확인 상태")
     sp.set_defaults(func=cmd_gemini)
     bg = sub.add_parser("bgm", help="BGM 라이브러리").add_subparsers(dest="bgcmd", required=True)
+    for name, hlp in (("remote-plan", "원격 생성 계획 검증"), ("remote-run", "Kaggle 커널 생성·푸시"),
+                      ("remote-status", "커널 상태"), ("remote-fetch", "결과 다운로드·검증·등록")):
+        sp = bg.add_parser(name, parents=[common], help=hlp)
+        sp.set_defaults(func=cmd_bgm_remote)
+        if name in ("remote-plan", "remote-run"):
+            sp.add_argument("prompts", help="prompts.yaml (6.4 형식)")
+        if name == "remote-run":
+            sp.add_argument("--owner", help="Kaggle 사용자명")
+            sp.add_argument("--accelerator", help="예: NvidiaTeslaT4 (생략하면 Kaggle 기본 GPU)")
+            sp.add_argument("--revision", help="ACE-Step 저장소의 커밋/태그를 고정")
+    sp = bg.add_parser("check", parents=[common], help="음원 검사(보컬 휴리스틱, 음량, 피크)")
+    sp.set_defaults(func=cmd_bgm_check)
+    sp.add_argument("file")
     sp = bg.add_parser("import", parents=[common], help="음원 등록")
     sp.set_defaults(func=cmd_bgm_import)
     sp.add_argument("file")
