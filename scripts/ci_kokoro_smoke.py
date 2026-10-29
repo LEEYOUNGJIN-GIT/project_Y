@@ -104,6 +104,14 @@ print(json.dumps(out, ensure_ascii=False))
 """
 
 
+# 1차 실행(run 12)에서 사전 치환이 의도와 어긋난 단어: Ekam('ehkum'->에이), Dve, Ashtau('ashtow'->오우)
+PHONEME_CANDIDATES = [
+    ("Ekam", "ekum"), ("Ekam", "ekkum"), ("Ekam", "[Ekam](/ˈɛkəm/)"),
+    ("Dve", "dvay"), ("Dve", "dway"), ("Dve", "[Dve](/dvˈA/)"),
+    ("Ashtau", "ashtau"), ("Ashtau", "[Ashtau](/ˈæʃtW/)"),
+]
+
+
 def phoneme_diagnostics(script_yaml: Path) -> None:
     """카운트 단어를 Kokoro G2P가 어떤 음소로 바꾸는지 철자 그대로 / 발음 사전의 철자 치환 둘 다 출력한다.
 
@@ -117,6 +125,8 @@ def phoneme_diagnostics(script_yaml: Path) -> None:
     for word, respell in pron.items():
         items.append([f"{word} (철자 그대로)", word])
         items.append([f"{word} (사전 '{respell}' -> '{respell.replace('-', '').lower()}')", respell.replace("-", "").lower()])
+    for word, cand in PHONEME_CANDIDATES:         # 사전 항목이 의도와 어긋난 단어의 후보 (철자 치환 / 음소 표기)
+        items.append([f"{word} 후보 {cand}", cand])
     r = subprocess.run([str(kokoro_python()), "-c", PHONEME_CODE, json.dumps(items, ensure_ascii=False)],
                        capture_output=True, text=True, encoding="utf-8", env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
     if r.returncode != 0:
@@ -168,21 +178,30 @@ def loudness_experiment(proj: Path) -> None:
             lines.append(f"- {name}: 무음")
             continue
         lines.append(f"- {name}: {m.integrated:.1f} LUFS / {m.true_peak:.1f} dBTP / PLR {m.true_peak - m.integrated:.1f} dB / LRA {m.lra}")
-    pre = stems.get("premix")
-    if pre is not None:
-        lines.append("### 마스터 앞단 압축 실험 (premix에 적용, 목표 -14 LUFS / -1 dBTP, 리미터 예산 4 dB)")
+    narr, bgm, cue = stems.get("narration"), stems.get("bgm_ducked"), stems.get("cue")
+    if narr is not None and bgm is not None:
+        from avsync.audio import mix as M
+        rest = [p for p in (bgm, cue) if p is not None]
+        lines.append("### 내레이션 스템만 압축한 뒤 다시 합산 (목표 -14 LUFS / -1 dBTP, 리미터 예산 4 dB)")
         work = Path(tempfile.mkdtemp(prefix="avsync_exp_"))
-        for label, flt in COMPRESSORS.items():
-            src = pre
-            if flt:
-                src = work / "comp.wav"
-                ff.run(["-i", str(pre), "-af", flt, "-c:a", "pcm_s16le", str(src)], context="압축 실험")
-            res = master_normalize(ff, src, work / "out.wav", target_i=-14.0, target_tp=-1.0, limiter_budget_db=4.0)
-            lines.append(f"- {label}: 입력 {res['input_i']:.1f} LUFS/{res['input_tp']:.1f} dBTP -> 출력 {res['output_i']:.1f} LUFS/"
+
+        def report(label: str, parts: list[Path], keep: str | None) -> None:
+            pre = work / "pre.wav"
+            M.sum_stems(ff, parts, pre, work)
+            res = master_normalize(ff, pre, work / "out.wav", target_i=-14.0, target_tp=-1.0, limiter_budget_db=4.0)
+            lines.append(f"- {label}: 합산 {res['input_i']:.1f} LUFS/{res['input_tp']:.1f} dBTP -> 출력 {res['output_i']:.1f} LUFS/"
                          f"{res['output_tp']:.1f} dBTP, LRA {res['output_lra']}, 목표 도달 {res['reached_target']}")
-            if flt:
+            if keep:
                 (OUT / "listening_compress").mkdir(exist_ok=True)
-                shutil.copy(work / "out.wav", OUT / "listening_compress" / (label.split(" (")[0].replace(" ", "_").replace(":", "-") + ".wav"))
+                shutil.copy(work / "out.wav", OUT / "listening_compress" / keep)
+
+        for i, (label, flt) in enumerate(COMPRESSORS.items()):
+            n = narr
+            if flt:
+                n = work / f"narr_{i}.wav"
+                ff.run(["-i", str(narr), "-af", flt, "-c:a", "pcm_s16le", str(n)], context="내레이션 압축 실험")
+            report(f"내레이션 {label}", [n, *rest], f"narr_{i}.wav" if flt else "narr_none.wav")
+        report("내레이션 압축 없음, BGM 없음(게이팅 영향 확인)", [p for p in (narr, cue) if p is not None], None)
     summary("\n".join(lines))
 
 
