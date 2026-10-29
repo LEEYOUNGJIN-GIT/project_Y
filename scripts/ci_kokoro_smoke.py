@@ -90,6 +90,7 @@ def voice_samples(info: dict) -> None:
 
 PHONEME_CODE = r"""
 import json, sys
+sys.stdout.reconfigure(encoding='utf-8')      # Windows 기본 콘솔 코덱(cp1252)은 IPA 음소를 인코딩하지 못한다
 from kokoro import KPipeline
 words = json.loads(sys.argv[1])
 p = KPipeline(lang_code='a', repo_id='hexgrad/Kokoro-82M', model=False)      # 음소 변환만 (가중치 로드 없음)
@@ -117,7 +118,7 @@ def phoneme_diagnostics(script_yaml: Path) -> None:
         items.append([f"{word} (철자 그대로)", word])
         items.append([f"{word} (사전 '{respell}' -> '{respell.replace('-', '').lower()}')", respell.replace("-", "").lower()])
     r = subprocess.run([str(kokoro_python()), "-c", PHONEME_CODE, json.dumps(items, ensure_ascii=False)],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8", env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
     if r.returncode != 0:
         summary("### 음소 진단 실패\n```\n" + r.stderr[-500:] + "\n```")
         return
@@ -139,6 +140,50 @@ def mix_diagnostics(proj: Path) -> None:
             f"(목표 {rep['target']['lufs']} LUFS, 리미터 예산 {ln['limiter_budget_db']} dB)\n"
             f"- BGM 이득 {bgm.get('gain_db')} dB, 내레이션 {bgm.get('narration_lufs')} LUFS, 덕킹 {bgm.get('duck_db')} dB\n"
             + "".join(f"- 경고: {w}\n" for w in rep.get("warnings", [])))
+
+
+COMPRESSORS = {
+    "압축 없음": None,
+    "acompressor 2:1 (-30 dB)": "acompressor=threshold=-30dB:ratio=2:attack=5:release=120:makeup=1",
+    "acompressor 3:1 (-30 dB)": "acompressor=threshold=-30dB:ratio=3:attack=5:release=120:makeup=1",
+    "acompressor 4:1 (-34 dB)": "acompressor=threshold=-34dB:ratio=4:attack=5:release=120:makeup=1",
+}
+
+
+def loudness_experiment(proj: Path) -> None:
+    """내레이션 PLR(피크-음량 차)이 얼마인지, 압축을 앞에 두면 목표 -14 LUFS에 닿는지 실측한다. 소리를 바꾸는 코드는 아직 넣지 않았다.
+
+    측정 근거만 남긴다: 어떤 설정이 듣기에 좋은지는 사람이 청취로 판단해야 한다.
+    """
+    from avsync.audio.loudness import master_normalize, measure_ebur128
+    from avsync.platform.ffmpeg import FFmpeg, Tools
+
+    rep = json.loads((proj / "manifests" / "mix_report.json").read_text(encoding="utf-8"))
+    stems = {k: Path(v) for k, v in (rep.get("stems") or {}).items() if Path(v).is_file()}
+    ff = FFmpeg(Tools(Path(shutil.which("ffmpeg")), Path(shutil.which("ffprobe")), True))
+    lines = ["### 스템별 음량/피크 (PLR = 피크 - 통합음량)"]
+    for name, path in sorted(stems.items()):
+        m = measure_ebur128(ff, path)
+        if m.integrated is None or m.true_peak is None:
+            lines.append(f"- {name}: 무음")
+            continue
+        lines.append(f"- {name}: {m.integrated:.1f} LUFS / {m.true_peak:.1f} dBTP / PLR {m.true_peak - m.integrated:.1f} dB / LRA {m.lra}")
+    pre = stems.get("premix")
+    if pre is not None:
+        lines.append("### 마스터 앞단 압축 실험 (premix에 적용, 목표 -14 LUFS / -1 dBTP, 리미터 예산 4 dB)")
+        work = Path(tempfile.mkdtemp(prefix="avsync_exp_"))
+        for label, flt in COMPRESSORS.items():
+            src = pre
+            if flt:
+                src = work / "comp.wav"
+                ff.run(["-i", str(pre), "-af", flt, "-c:a", "pcm_s16le", str(src)], context="압축 실험")
+            res = master_normalize(ff, src, work / "out.wav", target_i=-14.0, target_tp=-1.0, limiter_budget_db=4.0)
+            lines.append(f"- {label}: 입력 {res['input_i']:.1f} LUFS/{res['input_tp']:.1f} dBTP -> 출력 {res['output_i']:.1f} LUFS/"
+                         f"{res['output_tp']:.1f} dBTP, LRA {res['output_lra']}, 목표 도달 {res['reached_target']}")
+            if flt:
+                (OUT / "listening_compress").mkdir(exist_ok=True)
+                shutil.copy(work / "out.wav", OUT / "listening_compress" / (label.split(" (")[0].replace(" ", "_").replace(":", "-") + ".wav"))
+    summary("\n".join(lines))
 
 
 def main_() -> int:
@@ -199,6 +244,10 @@ def main_() -> int:
             summary("\n".join(lines))
     if (proj / "manifests" / "mix_report.json").is_file():
         mix_diagnostics(proj)
+        try:
+            loudness_experiment(proj)
+        except Exception as e:  # noqa: BLE001 - 실험은 부가 산출물
+            summary(f"### 음량 실험 실패: {type(e).__name__}: {e}")
     summary(f"### 샘플 가이드 합성 종료 코드: {rc} (0=성공, 2=길이 초과/겹침 보고)")
     return 0 if rc in (0, 2) else rc
 
