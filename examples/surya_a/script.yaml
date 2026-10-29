@@ -1,0 +1,23 @@
+# 12.5 대표 샘플 초안. 문구와 발음은 청취 후 확정한다.
+approved: false
+voice: {provider: null, voice_id: null, base_speed: 0.95}
+pronunciations:        # 시작값. 값이 /.../ 이면 음소 표기(Kokoro), 아니면 철자 치환. 청취 후 확정
+  Ekam: "EH-kum"
+  Dve: "dveh"
+  Trini: "TREE-nee"
+  Chatvari: "chaht-VAH-ree"
+  Pancha: "PUN-chah"
+  Shat: "shut"
+  Sapta: "SUP-tah"
+  Ashtau: "ASH-tow"
+  Nava: "NAH-vah"
+lines:
+  - {id: l01, text: "Ekam. Inhale, arms up.",                       mood: calm}
+  - {id: l02, text: "Dve. Exhale, fold.",                           mood: calm}
+  - {id: l03, text: "Trini. Inhale, head up, lengthen.",            mood: calm}
+  - {id: l04, text: "Chatvari. Exhale, step back.",                 mood: calm}
+  - {id: l05, text: "Pancha. Inhale, upward dog.",                  mood: calm}
+  - {id: l06, text: "Shat. Exhale, downward dog. Stay for five breaths.", mood: calm}
+  - {id: l07, text: "Sapta. Inhale, jump forward, head up.",        mood: calm}
+  - {id: l08, text: "Ashtau. Exhale, fold.",                        mood: calm}
+  - {id: l09, text: "Nava. Inhale, all the way up, arms up.",       mood: calm}

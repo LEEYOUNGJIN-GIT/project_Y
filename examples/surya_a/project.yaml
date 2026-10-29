@@ -1,0 +1,18 @@
+schema_version: 3
+project_id: surya_a
+input:
+  guide: guide.yaml          # audio-first. video-first는 video: assets/<파일>.mp4 를 지정
+  script: script.yaml
+tone: yoga_flow_calm
+audio:
+  original: duck             # 이어폰 촬영이면 환경음 정도. 스피커 유출이면 remove
+  duck_under_narration_db: -15
+  bgm:
+    source: none             # imported + path 로 바꾼다
+    license_note: ""
+output:
+  profile: reels_9x16
+  reframe: blur_pad
+  captions: sidecar_srt
+  loudness_lufs: -14.0
+  true_peak_dbfs: -1.0

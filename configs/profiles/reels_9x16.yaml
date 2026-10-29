@@ -1,0 +1,13 @@
+name: reels_9x16
+width: 1080
+height: 1920
+aspect: [9, 16]
+video_codec: libx264
+pix_fmt: yuv420p
+crf: 18
+preset: medium
+audio_codec: aac
+audio_bitrate: 192k
+audio_rate: 48000
+audio_channels: 2
+default_fps: 30      # VFR 영상을 CFR로 바꿀 때 평균 fps를 알 수 없으면 쓴다

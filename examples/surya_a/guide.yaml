@@ -1,0 +1,14 @@
+mode: audio_first
+count_in: {text: "Ready. Three, two, one.", count_in_s: 6.0, start_tone: true}
+breath: {count_s: 4.5}
+steps:
+  - {line: l01, counts: 1}
+  - {line: l02, counts: 1}
+  - {line: l03, counts: 1}
+  - {line: l04, counts: 1}
+  - {line: l05, counts: 1}
+  - {line: l06, counts: 11, hold: "Shat 1 + 5 breaths(10)", hold_mode: first_only}
+  - {line: l07, counts: 1}
+  - {line: l08, counts: 1}
+  - {line: l09, counts: 1}
+tail_s: 3.0

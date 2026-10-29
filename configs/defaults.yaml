@@ -1,0 +1,27 @@
+# 도구 경로. null이면 환경변수 AVSYNC_FFMPEG / AVSYNC_FFPROBE를 본다.
+# Windows 기본 권장: 절대 경로를 적고 allow_path_fallback을 false로 둔다 (PATH 의존 금지, 문서 3.3).
+tools:
+  ffmpeg: null
+  ffprobe: null
+  allow_path_fallback: true   # 개발 환경 편의. doctor가 PATH 사용 시 경고한다.
+
+# 모델 캐시. null이면 Windows는 %LOCALAPPDATA%\avsync\models, 그 외는 ~/.cache/avsync/models
+model_cache: null
+
+audio:
+  sample_rate: 48000
+  channels: 2
+
+tts:
+  default_provider: kokoro        # 벤치마크 통과 전까지는 "후보"이며 확정값이 아니다 (3.4)
+  words_per_second: [2.0, 2.4]    # 글자 수 예산 추정값. 첫 벤치마크 결과로 교체한다 (4.3)
+
+providers:
+  kokoro:
+    kind: subprocess
+    env_dir: provider_envs/kokoro
+    default_voice: null            # 청취 후 사용자가 선택. null이면 합성 요청이 거부된다
+    lang: en-US
+  flite:
+    kind: builtin
+    note: "FFmpeg libflite. 파이프라인 시험 전용. 품질 평가·실제 제작에 쓰지 않는다"

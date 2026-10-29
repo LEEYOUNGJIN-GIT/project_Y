@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+workspaces/*/cache/
+workspaces/*/outputs/
+workspaces/*/assets/
+library/bgm/*
+!library/bgm/.gitkeep
+reports/listening/
+*.egg-info/
+.env
+reports/ffmpeg_build.txt
+reports/benchmark_*.json

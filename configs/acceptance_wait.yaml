@@ -1,0 +1,6 @@
+# 12.1 사용자 허용 대기 시간. 값이 null이면 기본값으로 가정하지 않고 벤치마크 판정을 보류한다.
+# 사용: avsync benchmark tts --provider kokoro --acceptance configs/acceptance_wait.yaml
+acceptance_wait:
+  tts_30s_max_minutes: null
+  full_render_30s_max_minutes: null
+  bgm_library_batch_max_hours: null   # 원격 일괄 작업용 (Phase 3)

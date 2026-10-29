@@ -1,0 +1,23 @@
+# 모든 값은 시작값이며 직접 청취로 조정한다.
+tts:
+  max_speed: 1.06             # 속도 재합성 절대 상한 (5.1). 공급자 speed 파라미터 값
+  speed_step: 0.01
+  max_refit_iterations: 3
+  gap_min_ms: 250             # 항목 사이 최소 무음
+  sentence_pause_ms: 450      # 톤 프리셋이 없을 때의 문장 사이 무음
+guide:
+  lead_in_ms: 300             # 호흡 시작 후 내레이션 시작까지 (4.4: 200-400ms)
+  tone_hz: 880
+  tone_ms: 100
+  drift_tolerance_s: 0.15
+mix:
+  loudness_lufs: -14.0
+  loudness_tolerance_lu: 1.0
+  true_peak_dbfs: -1.0
+  true_peak_tolerance_db: 0.3
+  clip_peak_dbfs: -0.1        # 샘플 피크가 이 값 이상이면 clipping 경고
+  limiter_budget_db: 4.0      # 목표 음량을 위해 피크 리미터가 줄여도 되는 양(시작값, 청취로 조정)
+  duck_depth_tolerance_db: 2.0
+  fade_ms: 15                 # 내레이션 항목 경계 페이드
+video:
+  duration_tolerance_frames: 1

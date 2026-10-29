@@ -1,0 +1,23 @@
+[project]
+name = "avsync"
+version = "0.1.0"
+description = "촬영한 영상에 영어 TTS 내레이션과 BGM을 입히는 개인용 CLI"
+requires-python = ">=3.11"
+dependencies = ["pyyaml>=6.0"]
+
+[project.scripts]
+avsync = "avsync.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/avsync"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: FFmpeg가 필요한 테스트"]

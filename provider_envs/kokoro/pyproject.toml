@@ -1,0 +1,7 @@
+[project]
+name = "avsync-kokoro-env"
+version = "0.0.0"
+description = "Kokoro TTS 워커 전용 환경 (메인 환경과 의존성을 섞지 않는다)"
+requires-python = ">=3.10,<3.13"
+# 버전은 Phase 0 설치 시험 후 고정한다. 지금은 상한 없이 두고 uv.lock으로 재현성을 확보한다. [재확인]
+dependencies = ["kokoro>=0.9", "soundfile", "numpy"]
