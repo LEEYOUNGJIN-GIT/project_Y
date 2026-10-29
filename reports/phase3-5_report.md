@@ -58,6 +58,8 @@ GitHub 로그인 후 <https://github.com/LEEYOUNGJIN-GIT/project_Y/actions/runs/
 이에 따라 `examples/surya_a/script.yaml`의 항목을 `Ekam: "EK-um"`, `Dve: "/dvˈA/"`, `Ashtau: "ASH-tau"`로 바꿨다(대본 문구는 그대로).
 `Dve`의 음소 표기가 신경망 음성에서 자연스러운지는 모른다 - 첫 청취 항목이다.
 
+run 16(수정 후)에서 확인: `Dve.` -> `[Dve](/dvˈA/).`가 실제 Kokoro를 거쳐 합성되고 단어 시각(`Dve[0.00-0.52]`)도 나오며 fit은 전 항목 ok. 음소 표기로 바꾸자 `Dve` 길이가 0.64초에서 0.52초로 달라졌다(소리가 바뀐 것은 확실, 좋아졌는지는 청취 필요). 음량 수치는 재현됨(마스터 -19.6 LUFS, BGM 없이 -15.5).
+
 ### 2-2. 목표 -14 LUFS를 실제 Kokoro 음성에서 못 맞추는 원인 (Q5의 답)
 
 합성 BGM(사인 화음)과 af_heart로 만든 94.5초 가이드. 러너 측정이며 실제 곡이 아니다.
