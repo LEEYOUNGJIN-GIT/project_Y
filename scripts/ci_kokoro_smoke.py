@@ -88,6 +88,59 @@ def voice_samples(info: dict) -> None:
     summary("\n".join(rows))
 
 
+PHONEME_CODE = r"""
+import json, sys
+from kokoro import KPipeline
+words = json.loads(sys.argv[1])
+p = KPipeline(lang_code='a', repo_id='hexgrad/Kokoro-82M', model=False)      # 음소 변환만 (가중치 로드 없음)
+out = {}
+for label, text in words:
+    ph = []
+    for gs, ps, _ in p(text):
+        ph.append(ps)
+    out[label] = ' | '.join(ph)
+print(json.dumps(out, ensure_ascii=False))
+"""
+
+
+def phoneme_diagnostics(script_yaml: Path) -> None:
+    """카운트 단어를 Kokoro G2P가 어떤 음소로 바꾸는지 철자 그대로 / 발음 사전의 철자 치환 둘 다 출력한다.
+
+    지시서의 respelling(예: EH-kum)이 실제로 의도한 소리에 가까워지는지 사람이 판단할 근거다. 이 진단은 소리를 들려주지는 않는다.
+    """
+    import subprocess
+
+    import yaml
+    pron = yaml.safe_load(script_yaml.read_text(encoding="utf-8")).get("pronunciations") or {}
+    items = []
+    for word, respell in pron.items():
+        items.append([f"{word} (철자 그대로)", word])
+        items.append([f"{word} (사전 '{respell}' -> '{respell.replace('-', '').lower()}')", respell.replace("-", "").lower()])
+    r = subprocess.run([str(kokoro_python()), "-c", PHONEME_CODE, json.dumps(items, ensure_ascii=False)],
+                       capture_output=True, text=True, encoding="utf-8")
+    if r.returncode != 0:
+        summary("### 음소 진단 실패\n```\n" + r.stderr[-500:] + "\n```")
+        return
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    (OUT / "phonemes.json").write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary("### 카운트 단어의 Kokoro 음소 (misaki 표기; 철자 그대로 vs 발음 사전 치환)\n"
+            + "\n".join(f"- {k}: `{v}`" for k, v in res.items()))
+
+
+def mix_diagnostics(proj: Path) -> None:
+    """실제 Kokoro 음성으로 만든 가이드의 음량 정규화 결과 (합성 flite 시험에서는 -16.5 LUFS에서 멈췄다)."""
+    rep = json.loads((proj / "manifests" / "mix_report.json").read_text(encoding="utf-8"))
+    ln = rep["loudnorm"]
+    bgm = rep.get("bgm") or {}
+    summary("### 실제 Kokoro 음성 + 합성 BGM의 마스터 음량\n"
+            f"- 입력 {ln['input_i']:.1f} LUFS / 피크 {ln['input_tp']:.1f} dBTP -> 이득 {ln['gain_db']:+.1f} dB"
+            f"{' (리미터 사용)' if ln['limited'] else ''}\n"
+            f"- 출력 {ln['output_i']:.1f} LUFS / 피크 {ln['output_tp']:.1f} dBTP, 목표 도달: **{ln['reached_target']}** "
+            f"(목표 {rep['target']['lufs']} LUFS, 리미터 예산 {ln['limiter_budget_db']} dB)\n"
+            f"- BGM 이득 {bgm.get('gain_db')} dB, 내레이션 {bgm.get('narration_lufs')} LUFS, 덕킹 {bgm.get('duck_db')} dB\n"
+            + "".join(f"- 경고: {w}\n" for w in rep.get("warnings", [])))
+
+
 def main_() -> int:
     OUT.mkdir(exist_ok=True)
     rc = main(["benchmark", "tts", "--provider", "kokoro", "--voice", VOICE, "--targets", "15,30", "--listen"])
@@ -118,6 +171,17 @@ def main_() -> int:
         "voice: {provider: null, voice_id: null, base_speed: 0.95}",
         f"voice: {{provider: kokoro, voice_id: {VOICE}, base_speed: 0.95}}")
     (proj / "script.yaml").write_text(s, encoding="utf-8")
+    phoneme_diagnostics(proj / "script.yaml")
+    # 믹스 음량 측정을 위해 합성 BGM(사인 화음 + 느린 트레몰로)을 붙인다
+    import subprocess
+    bgm = work / "bgm_ci.wav"
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=220:d=40", "-f", "lavfi",
+                    "-i", "sine=f=277.18:d=40", "-f", "lavfi", "-i", "sine=f=329.63:d=40", "-filter_complex",
+                    "[0][1][2]amix=inputs=3:normalize=0,tremolo=f=0.3:d=0.4,aformat=channel_layouts=stereo,volume=0.5",
+                    "-c:a", "pcm_s16le", str(bgm)], check=True)
+    pj = (proj / "project.yaml").read_text(encoding="utf-8")
+    pj = pj.replace("source: none", f"source: imported\n    path: '{bgm.as_posix()}'").replace('license_note: ""', 'license_note: "CI 합성 사인파"')
+    (proj / "project.yaml").write_text(pj, encoding="utf-8")
     rc = main(["guide", "--project", str(proj / "project.yaml")])
     if (proj / "outputs").is_dir():
         shutil.copytree(proj / "outputs" / "guide", OUT / "guide", dirs_exist_ok=True)
@@ -133,6 +197,8 @@ def main_() -> int:
             lines.append("- 발음 사전 적용 문장: " + "; ".join(
                 f"{seg['original']} -> {seg['spoken']}" for r in rep["items"][:3] for seg in r["audio"]["segments"] if seg["spoken"] != seg["normalized"]))
             summary("\n".join(lines))
+    if (proj / "manifests" / "mix_report.json").is_file():
+        mix_diagnostics(proj)
     summary(f"### 샘플 가이드 합성 종료 코드: {rc} (0=성공, 2=길이 초과/겹침 보고)")
     return 0 if rc in (0, 2) else rc
 

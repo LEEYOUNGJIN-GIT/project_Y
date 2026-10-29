@@ -43,9 +43,9 @@ jobs:
       - name: Install FFmpeg (Windows)
         run: choco install ffmpeg -y --no-progress
       - run: uv sync
-      - name: Kokoro 환경 설치 (Python 3.12)
-        working-directory: provider_envs/kokoro
-        run: uv sync --python 3.12
+      - name: Kokoro 환경 설치 (scripts/setup_kokoro.ps1, Windows PowerShell 5.1)
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts\setup_kokoro.ps1
       - name: 벤치마크 + 샘플 가이드 합성
         run: uv run python scripts/ci_kokoro_smoke.py
       - uses: actions/upload-artifact@v4
