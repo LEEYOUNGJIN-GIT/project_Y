@@ -74,7 +74,9 @@ def master_normalize(ff: FFmpeg, src: Path, dst: Path, *, target_i: float, targe
     if m.integrated is None or m.true_peak is None:
         raise RuntimeError("입력이 무음이라 음량 정규화를 할 수 없습니다")
     gain_target = target_i - m.integrated
-    gain_cap = (target_tp - m.true_peak) + limiter_budget_db      # 리미터 예산까지 허용한 최대 이득
+    headroom = target_tp - m.true_peak                              # 이득 없이 피크 한도까지 올릴 수 있는 양
+    gain_cap = headroom + limiter_budget_db                         # 리미터 예산까지 허용한 최대 이득
+    needed_budget = max(0.0, gain_target - headroom)                # 목표 음량에 필요한 리미터 예산 (입력 피크 기준 추정)
     gain = min(gain_target, gain_cap)
     ceiling = 10 ** ((target_tp - ceiling_offset_db) / 20)
     out = None
@@ -89,7 +91,7 @@ def master_normalize(ff: FFmpeg, src: Path, dst: Path, *, target_i: float, targe
         gain = min(gain + err, gain_cap)                              # 리미터가 깎은 만큼 보상
     reached = out.integrated is not None and abs(out.integrated - target_i) <= max(tolerance_lu, 0.5)
     return {"method": "linear_gain_plus_limiter", "input_i": m.integrated, "input_tp": m.true_peak,
-            "gain_db": round(gain, 2), "limiter_budget_db": limiter_budget_db,
+            "gain_db": round(gain, 2), "limiter_budget_db": limiter_budget_db, "needed_budget_db": round(needed_budget, 1),
             "limited": gain > (target_tp - m.true_peak) + 1e-6, "iterations": iters,
             "output_i": out.integrated, "output_tp": out.true_peak, "output_lra": out.lra,
             "reached_target": reached}

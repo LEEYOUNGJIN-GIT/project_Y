@@ -285,7 +285,9 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
     tp = ctx.project.true_peak_dbfs if ctx.project.true_peak_dbfs is not None else g["true_peak_dbfs"]
     ln = M.normalize_master(ff, pre, out_wav, lufs=lufs, true_peak=tp, budget_db=g["limiter_budget_db"])
     if not ln["reached_target"]:
-        rep["warnings"].append(f"목표 {lufs} LUFS에 못 미침({ln['output_i']:.1f} LUFS): 피크 제한 예산 {g['limiter_budget_db']} dB 소진. 내레이션 피크를 낮추거나 예산을 늘리세요")
+        rep["warnings"].append(f"목표 {lufs} LUFS에 못 미침({ln['output_i']:.1f} LUFS): 피크 제한 예산 {g['limiter_budget_db']} dB 소진. "
+            f"이 믹스로 목표를 맞추려면 예산이 약 {ln['needed_budget_db']} dB 필요(입력 피크 기준 추정). "
+            "예산을 늘리거나(왜곡 위험), 목표 음량을 낮추거나, BGM 상대 음량을 바꿔 보세요. 어느 쪽이 나은지는 들어서 정하세요")
     rep["loudnorm"] = ln
     rep["target"] = {"lufs": lufs, "true_peak_dbfs": tp}
     rep["master"] = str(out_wav)

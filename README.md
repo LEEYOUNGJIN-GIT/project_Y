@@ -127,7 +127,7 @@ Kaggle 토큰은 `kaggle` CLI의 표준 위치에 두며 이 도구는 읽지 �
 - 영상은 9:16·h264·yuv420p·CFR이면 **스트림 복사**(화질 손실 없음). 그 외·burn-in·정확한 트림은 재인코딩하고 사유를 보고한다.
 - 대본 문구는 도구가 바꾸지 않는다. 길이가 넘으면 `fit-report`가 보고하고 단축 후보만 제안한다.
 - `emphasis`(강조 단어 앞뒤 무음)와 `cue_speed`(카운트 단어만 있는 문장의 속도)는 톤 프리셋 값으로 동작한다.
-- 목표 -14 LUFS에 못 미치면 QA가 경고한다. 리미터가 줄일 수 있는 양은 `quality_gates.yaml`의 `mix.limiter_budget_db`.
+- 목표 -14 LUFS에 못 미치면 QA가 경고하고, 그 믹스로 목표를 맞추는 데 필요한 리미터 예산(추정)을 함께 알려 준다. 리미터가 줄일 수 있는 양은 `quality_gates.yaml`의 `mix.limiter_budget_db`. 실제 Kokoro 음성 + 연속 BGM 조합은 기본 예산 4 dB로 -14에 닿지 못했다(`reports/phase3-5_report.md` 2-2) - 목표값·예산은 들어서 정한다.
 - `approved: false`이면 최종 렌더·촬영용 가이드를 만들지 않는다(미리듣기만).
 - 설정 파일의 알 수 없는 키(오타)는 경고한다.
 
