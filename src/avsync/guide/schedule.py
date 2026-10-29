@@ -56,12 +56,11 @@ class GuidePlan:
 
 
 def load_guide(path: Path) -> GuideSpec:
-    import yaml as _y
     try:
-        data = _y.load(Path(path).read_text(encoding="utf-8"), Loader=_LineLoader)  # noqa: S506
+        data = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=_LineLoader)  # noqa: S506
     except FileNotFoundError:
         raise ScriptError([f"{path}: 파일이 없습니다"]) from None
-    except _y.YAMLError as e:
+    except yaml.YAMLError as e:
         mark = getattr(e, "problem_mark", None)
         raise ScriptError([f"{path}:{mark.line + 1 if mark else 1}: YAML 문법 오류: {getattr(e, 'problem', e)}"]) from None
     problems: list[str] = []

@@ -237,7 +237,7 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
 
     if original_media is not None and original_has_audio:
         raw = work / "original_raw.wav"
-        M.extract_original(ff, original_media, rep.get("original_start_us", 0), D, raw, work)
+        M.extract_original(ff, original_media, 0, D, raw, work)
         no_narr = [tuple(w) for w in timeline.get("no_narration", [])]
         policy = original_policy
         if policy == "keep":

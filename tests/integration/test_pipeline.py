@@ -189,15 +189,13 @@ def test_guide_exports_and_reports_total(af_project, ff, capsys):
 
 
 def test_guide_item_too_long_is_error_and_no_export(af_project, ff, capsys):
+    """한 호흡(3초)에 못 들어가는 긴 문구: 속도 상한을 써도 넘으면 exit 2, 가이드 파일은 만들지 않는다."""
     s = af_project.parent / "script.yaml"
-    s.write_text(s.read_text().replace("Stay here.", "Stay here " * 30), encoding="utf-8")
-    g = af_project.parent / "guide.yaml"
-    g.write_text(g.read_text().replace("{line: l01, counts: 1}", "{line: l01, counts: 1}"), encoding="utf-8")
-    (af_project.parent / "script.yaml").write_text(
-        (af_project.parent / "script.yaml").read_text().replace("Ekam. Inhale up.", "Ekam. " + "Inhale up now please. " * 8),
-        encoding="utf-8")
+    s.write_text(s.read_text().replace("Ekam. Inhale up.", "Ekam. " + "Inhale up now please. " * 8), encoding="utf-8")
     assert cli("guide", "--project", af_project) == 2
-    assert not list((af_project.parent / "outputs" / "guide").glob("guide_*.wav")) if (af_project.parent / "outputs" / "guide").exists() else True
+    out = capsys.readouterr().out
+    assert "exceeded" in out and "제안" in out
+    assert not list((af_project.parent / "outputs").glob("guide/guide_*.wav"))
 
 
 def test_merge_places_audio_at_offset_and_preserves_video(af_project, ff, video916, tmp_path, capsys):

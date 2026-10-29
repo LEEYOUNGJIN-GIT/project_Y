@@ -91,8 +91,7 @@ def cmd_check_script(args) -> int:
         spec = load_guide(ctx.project.guide)
         lead = (spec.lead_in_ms if spec.lead_in_ms is not None else ctx.gates["guide"]["lead_in_ms"]) * 1000
         for st in spec.steps:
-            budgets[st.line] = st.counts * spec.count_us - lead if st.hold_mode == "every_breath" or st.counts == 1 \
-                else st.counts * spec.count_us - lead
+            budgets[st.line] = st.counts * spec.count_us - lead
     else:
         info = P.video_info(ctx)
         L = script.lines
