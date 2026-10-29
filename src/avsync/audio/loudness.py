@@ -72,7 +72,7 @@ def master_normalize(ff: FFmpeg, src: Path, dst: Path, *, target_i: float, targe
     """
     m = measure_ebur128(ff, src)
     if m.integrated is None or m.true_peak is None:
-        raise RuntimeError("입력이 무음이라 음량 정규화를 할 수 없습니다")
+        raise ValueError("입력이 무음이라 음량 정규화를 할 수 없습니다")
     gain_target = target_i - m.integrated
     headroom = target_tp - m.true_peak                              # 이득 없이 피크 한도까지 올릴 수 있는 양
     gain_cap = headroom + limiter_budget_db                         # 리미터 예산까지 허용한 최대 이득

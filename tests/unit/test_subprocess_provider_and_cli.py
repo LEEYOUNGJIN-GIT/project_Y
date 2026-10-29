@@ -119,3 +119,33 @@ def test_stdout_noise_from_libraries_is_ignored(prov, tmp_path, capfd):
     r = prov.synthesize(req(tmp_path, text="__NOISE__"))
     assert r.duration_us > 0
     assert "Downloading en-core-web-sm" in capfd.readouterr().err               # 소음은 버리지 않고 stderr로 흘려보냄
+
+
+def test_brace_lines_that_are_not_replies_do_not_desynchronise_the_protocol(prov, tmp_path, capfd):
+    """`{`로 시작하는 잡음(딕셔너리 repr 등)을 응답으로 오인해 JSONDecodeError가 나거나 응답이 한 칸씩 밀리던 결함 (코드 리뷰)."""
+    r = prov.synthesize(req(tmp_path, text="__BRACE__"))
+    assert r.duration_us > 0
+    err = capfd.readouterr().err
+    assert "dict repr from a library" in err and "{not json at all" in err
+    again = prov.synthesize(req(tmp_path, text="after the noise"))             # 다음 요청이 자기 응답을 받는다
+    assert again.duration_us > 0 and again.meta.get("voice")
+
+
+def test_cli_reports_missing_kaggle_cleanly(tmp_path, monkeypatch, capsys):
+    """kaggle CLI가 없을 때 파이썬 트레이스백 대신 한국어 오류와 종료 코드 1 (코드 리뷰)."""
+    from avsync.cli import main
+    monkeypatch.setattr("shutil.which", lambda name, *a, **k: None)
+    monkeypatch.chdir(tmp_path)
+    assert main(["bgm", "remote-status"]) == 1
+    assert "kaggle" in capsys.readouterr().err
+
+
+def test_benchmark_voice_is_per_provider_when_several_providers(capsys):
+    """`--provider a,b --voice x`가 voice를 조용히 버려 첫 공급자에서 'voice_id 없음'으로 실패하던 동작 (코드 리뷰)."""
+    from avsync.cli import _parse_voices, main
+    assert _parse_voices(None, ["kokoro", "gemini"]) == {}
+    assert _parse_voices("af_heart", ["kokoro"]) == {"kokoro": "af_heart"}
+    assert _parse_voices("kokoro=af_heart,gemini=Kore", ["kokoro", "gemini"]) == {"kokoro": "af_heart", "gemini": "Kore"}
+    assert main(["benchmark", "tts", "--provider", "kokoro,gemini", "--voice", "af_heart", "--dry-run"]) == 1
+    assert "공급자별" in capsys.readouterr().err
+    assert main(["benchmark", "tts", "--provider", "kokoro", "--voice", "kokoro=af_heart,x=y", "--dry-run"]) == 1

@@ -24,4 +24,4 @@ video:
 bgm:                          # 원격 생성 곡 검증 (6.3-4). 모두 시작값
   min_duration_ratio: 0.5     # 요청 길이의 이 비율 미만이면 폐기
   vocal_discard_score: 0.6    # 보컬 휴리스틱 점수가 이 이상이면 폐기 (휴리스틱이므로 청취로 재확인)
-  vocal_unknown_score: 0.35   # 이 미만이면 vocals: no, 이상이면 unknown으로 기록
+  vocal_unknown_score: 0.35   # 이 미만이면 vocals_hint: no (참고용). 곡의 vocals 값은 청취 확인 전까지 항상 unknown

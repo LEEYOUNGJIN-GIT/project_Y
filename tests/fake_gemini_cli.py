@@ -8,6 +8,7 @@ import math
 import os
 import struct
 import sys
+import time
 import wave
 from pathlib import Path
 
@@ -45,6 +46,17 @@ def main(argv) -> int:
         if mode == "rate_once":
             counter.write_text("1")
         print(f"429 RESOURCE_EXHAUSTED quota exceeded (key={KEY})", file=sys.stderr)
+        return 1
+    if mode == "hang" or (mode == "hang_once" and not counter.exists()):
+        if mode == "hang_once":
+            counter.write_text("1")
+        time.sleep(30)                                            # 네트워크가 멈춘 상황 (공급자의 timeout_s가 먼저 끊는다)
+        return 1
+    if mode == "http503":
+        print("503 Service Unavailable", file=sys.stderr)
+        return 1
+    if mode == "voice_unavailable":
+        print("voice 'Foo' is unavailable for this model", file=sys.stderr)
         return 1
     if mode == "fail":
         print("500 internal error", file=sys.stderr)

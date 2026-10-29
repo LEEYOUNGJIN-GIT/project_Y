@@ -130,3 +130,54 @@ def test_guide_yaml_breath_validation(tmp_path):
                         ("{count_s: 3, bpm: 72}", "count_beats와 함께")):
         with pytest.raises(ScriptError, match=needle):
             load(bad)
+
+
+def test_check_script_uses_tempo_derived_budget_in_music_first_mode(tmp_path, ff, fake, capsys):
+    """count_beats 모드에서 호흡 길이(count_us)가 0인 채로 예산을 계산해 모든 줄에 음수 예산 경고가 붙던 결함 (코드 리뷰)."""
+    guide = """mode: audio_first
+count_in: {text: "Ready. Three.", count_in_s: 3.0, start_tone: true}
+breath: {count_beats: 4, bpm: 60}
+steps:
+  - {line: l01, counts: 1}
+  - {line: l02, counts: 1}
+  - {line: l03, counts: 2}
+tail_s: 1.0
+"""
+    proj = write_project(tmp_path / "cs", guide=True, script=AF_SCRIPT, guide_yaml=guide)
+    assert cli("check-script", "--project", proj, "--json") == 0
+    res = json.loads(capsys.readouterr().out)
+    assert not [f for f in res["findings"] if "허용 -" in f["message"]]
+
+
+def test_check_script_reports_when_music_first_tempo_is_unavailable(tmp_path, ff, fake, capsys):
+    guide = """mode: audio_first
+count_in: {text: "Ready. Three.", count_in_s: 3.0, start_tone: true}
+breath: {count_beats: 4, bpm: from_bgm}
+steps:
+  - {line: l01, counts: 1}
+tail_s: 1.0
+"""
+    proj = write_project(tmp_path / "cs2", guide=True, script=AF_SCRIPT, guide_yaml=guide)      # BGM 없음
+    assert cli("check-script", "--project", proj, "--json") == 0
+    res = json.loads(capsys.readouterr().out)
+    assert any("건너뜀" in f["message"] for f in res["findings"])
+    assert not [f for f in res["findings"] if "허용 -" in f["message"]]
+
+
+def test_count_us_is_identical_on_first_and_cached_runs(tmp_path, ff, fake, monkeypatch):
+    """첫 실행은 분석 원값(90.004 BPM), 이후 실행은 캐시의 반올림 값(90.0)을 써서 count_us와 가이드 해시가 달라지던 결함 (코드 리뷰)."""
+    from avsync import pipeline as P
+    from avsync.audio import beats as B
+    from avsync.guide.build import resolve_beats
+    calls = []
+
+    def fake_analyze(ff_, path, work):
+        calls.append(path)
+        return B.BeatInfo(90.004, 666_607, 370_000, 0.9, [370_000, 1_036_607], 0, [])
+    monkeypatch.setattr(B, "analyze_file", fake_analyze)
+    proj = project_for(tmp_path, ff, fake, click_track(90, seconds=5),
+                       "{count_beats: 4, bpm: from_bgm, beat_align: true}")
+    ctx = P.make_context(proj)
+    first, _ = resolve_beats(ctx, load_guide(ctx.project.guide))
+    second, _ = resolve_beats(P.make_context(proj), load_guide(ctx.project.guide))
+    assert len(calls) == 1 and first.count_us == second.count_us

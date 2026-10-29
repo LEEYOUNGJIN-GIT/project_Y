@@ -32,7 +32,7 @@ def import_bgm(ff: FFmpeg, src: Path, note: str, vocals: str, *, library: Path |
     peak = measure_peak_db(ff, dst)
     warnings = []
     if vocals != "no":
-        warnings.append("보컬 유무 미확인/있음: 내레이션과 충돌하므로 보컬 없는 곡을 권장 (자동 보컬 감지는 Phase 3)")
+        warnings.append("보컬 유무 미확인/있음: 내레이션과 충돌하므로 들어서 확인하세요 (`avsync bgm check`의 휴리스틱은 참고용이며 실제 보컬 음악으로 검증되지 않음)")
     if peak is not None and peak > -0.1:
         warnings.append(f"원본 BGM 피크 {peak:.1f} dBFS - clipping 가능성")
     meta = {"file": dst.name, "sha256": sha, "source_file": str(src), "duration_us": dur,

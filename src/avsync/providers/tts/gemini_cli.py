@@ -24,11 +24,11 @@ from typing import Sequence
 
 from ...audio.wavutil import read_wav
 from ...platform.ffmpeg import FFmpeg
-from ...platform.process import run
+from ...platform.process import ProcessFailed, run
 from .base import ProviderError, RateLimitError, TTSCapabilities, TTSRequest, TTSResult
 
 _KEY_RE = re.compile(r"AIza[0-9A-Za-z_\-]{16,}|(?i:api[_-]?key)\s*[=:]\s*\S+")
-_RATE_RE = re.compile(r"429|rate.?limit|quota|resource.?exhausted|too many requests|unavailable|overloaded", re.I)
+_RATE_RE = re.compile(r"429|rate.?limit|quota|resource.?exhausted|too many requests|service.?unavailable|\b503\b|overloaded", re.I)
 
 
 def redact(text: str) -> str:
@@ -67,8 +67,11 @@ class GeminiCliTTSProvider:
 
     def capabilities(self) -> TTSCapabilities:
         if self._version is None:
-            r = run([*self.command, "version"], timeout=30)
-            self._version = (r.stdout.strip().splitlines() or ["unknown"])[0] if r.ok else "unknown"
+            try:
+                r = run([*self.command, "version"], timeout=30)
+                self._version = (r.stdout.strip().splitlines() or ["unknown"])[0] if r.ok else "unknown"
+            except ProcessFailed:
+                self._version = "unknown"
         return TTSCapabilities(
             name="gemini-cli", version=f"{self._version}|model={self.model or 'cli-default'}|style={self.style_prefix!r}",
             languages=["en-US"], speed=False, word_timestamps=False, emotion=False, sample_rate=24000, cpu=True,
@@ -102,7 +105,15 @@ class GeminiCliTTSProvider:
         last = ""
         for attempt in range(self.max_retries + 1):
             self.attempts += 1
-            r = run(args, timeout=self.timeout_s)
+            try:
+                r = run(args, timeout=self.timeout_s)
+            except ProcessFailed as e:                              # 시간 초과: 네트워크 정체로 보고 한도와 같은 방식으로 재시도한다
+                if attempt < self.max_retries:
+                    time.sleep(self.backoff_s * (2 ** attempt))
+                    continue
+                raise ProviderError(
+                    f"gemini-api가 {self.timeout_s:g}초 안에 끝나지 않았습니다 ({attempt + 1}회 시도). 이미 합성된 항목은 캐시에 남아 있어 "
+                    "같은 명령을 다시 실행하면 이어서 합니다. 네트워크 상태를 확인하세요") from e
             err = redact(r.stderr.strip()[-400:])
             if r.returncode == 0:
                 return self._written_file(r.stdout, outdir)

@@ -133,7 +133,8 @@ def extract_original(ff: FFmpeg, media: Path, start_us: int, duration_us: int, o
     total = us_to_samples(duration_us, RATE)
     s = start_us / US
     if stream_offset_us > 0:
-        pre = f"adelay=delays={us_to_samples(stream_offset_us, RATE)}S:all=1,"
+        # adelay는 샘플만 채우고 프레임 PTS에는 스트림 시작 오프셋이 남으므로, 뒤의 atrim이 영상 시간과 어긋나지 않게 PTS를 0으로 되돌린다
+        pre = f"adelay=delays={us_to_samples(stream_offset_us, RATE)}S:all=1,asetpts=PTS-STARTPTS,"
     elif stream_offset_us < 0:
         pre = f"atrim=start_sample={us_to_samples(-stream_offset_us, RATE)},asetpts=PTS-STARTPTS,"
     else:
@@ -187,7 +188,7 @@ def compute_bgm_gain(ff: FFmpeg, narration_bus: Path, bgm_fit: Path, level_rel_d
     n = measure_ebur128(ff, narration_bus).integrated
     b = measure_ebur128(ff, bgm_fit).integrated
     if n is None or b is None:
-        raise RuntimeError("내레이션 또는 BGM이 무음이라 상대 음량을 계산할 수 없습니다")
+        raise ValueError("내레이션 또는 BGM이 무음이라 상대 음량을 계산할 수 없습니다")
     return (n + level_rel_db) - b, n, b
 
 

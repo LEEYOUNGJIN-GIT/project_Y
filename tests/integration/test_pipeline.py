@@ -405,6 +405,26 @@ def test_audio_start_offset_is_respected_for_original_audio(tmp_path, ff):
     assert (early is None or early < -60) and later is not None and later > -30
 
 
+def test_original_audio_trim_start_respects_late_audio_stream(tmp_path, ff):
+    """오디오가 영상보다 0.5초 늦게 시작하고 trim_start가 있어도 영상 시간 1.0초에서 잘려야 한다 (코드 리뷰에서 발견)."""
+    from avsync.audio import mix as M
+    vid = tmp_path / "late_burst.mp4"
+    # 오디오 시간 1.2-1.25초에 1 kHz 버스트 -> 영상 시간 1.7-1.75초
+    ff.run(["-f", "lavfi", "-i", "testsrc2=s=64x64:r=30:d=4", "-itsoffset", "0.5", "-f", "lavfi", "-i",
+            "aevalsrc='if(between(t,1.2,1.25),0.8*sin(2*PI*1000*t),0)':d=3:s=48000",
+            "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-c:a", "aac", str(vid)])
+    from avsync.config import load_config
+    from avsync.platform.ffmpeg import find_tools
+    from avsync.video.probe import probe_video
+    info = probe_video(find_tools(load_config()), vid)
+    out = tmp_path / "orig_trim.wav"
+    M.extract_original(ff, vid, 1_000_000, 2_000_000, out, tmp_path / "w", stream_offset_us=info.audio_offset_us)
+    # 결과 0초 = 영상 시간 1.0초 -> 버스트는 결과 0.7-0.75초
+    before = measure_rms_db(ff, out, 550_000, 100_000)
+    burst = measure_rms_db(ff, out, 710_000, 30_000)
+    assert (before is None or before < -50) and burst is not None and burst > -25
+
+
 # ------------------------------------------------------------------ build / 오타 경고
 
 def test_build_runs_all_steps_and_stops_on_fit_error(tmp_path, ff, fake, video916, capsys):

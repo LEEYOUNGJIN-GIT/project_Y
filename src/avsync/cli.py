@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import pipeline as P
 from .config import ConfigError, load_config
+from .remote.kaggle import RemoteError
 from .domain.manifest import read_json
 from .domain.script import ScriptError, load_script
 from .domain.timebase import TimeError, fmt_time, parse_time
@@ -88,11 +89,18 @@ def cmd_check_script(args) -> int:
         fps = P.video_info(ctx).fps
     script = load_script(ctx.project.script, require_at=not af, fps=fps)
     budgets: dict[str, int | None] = {}
+    pre_findings: list[dict] = []
     if af:
+        from .guide.build import resolve_beats
         spec = load_guide(ctx.project.guide)
         lead = (spec.lead_in_ms if spec.lead_in_ms is not None else ctx.gates["guide"]["lead_in_ms"]) * 1000
+        if spec.count_beats is not None:               # 음악 우선: count_us는 BPM으로 먼저 계산해야 한다 (그대로 두면 0)
+            try:
+                spec, _ = resolve_beats(ctx, spec)
+            except ConfigError as e:
+                pre_findings.append({"level": "warn", "id": None, "message": f"호흡 길이를 계산하지 못해 글자 수 예산 검사를 건너뜀: {e}"})
         for st in spec.steps:
-            budgets[st.line] = st.counts * spec.count_us - lead
+            budgets[st.line] = st.counts * spec.count_us - lead if spec.count_us > 0 else None
     else:
         info = P.video_info(ctx)
         L = script.lines
@@ -101,6 +109,7 @@ def cmd_check_script(args) -> int:
             budgets[ln.id] = end - ln.at_us
     findings = check_script(script, ctx.tts_cfg, ctx.cfg.defaults["tts"]["words_per_second"],
                             budgets_us=budgets, audio_first=af)
+    findings = pre_findings + findings
     findings += [{"level": "warn", "id": None, "message": w} for w in script.warnings]
     if af:
         findings += [{"level": "warn", "id": None, "message": f"guide.yaml {w}"} for w in load_guide(ctx.project.guide).warnings]
@@ -311,8 +320,10 @@ def cmd_merge(args) -> int:
             raise ConfigError(f"--mark는 단계=시각 형식이어야 합니다: {m!r} (예: l06=01:00.2)")
         marks[name] = parse_time(t, fps=fps)
     project = None
+    proj_ctx = None
     if args.project:
-        project = P.make_context(Path(args.project)).project
+        proj_ctx = P.make_context(Path(args.project))          # 한 번만 만든다 (설정 로드·도구 탐색·오타 경고가 두 번 나오지 않게)
+        project = proj_ctx.project
     out = Path(args.out) if args.out else video.with_name(video.stem + ".final.mp4")
     policy = args.original or (project.original if project else "duck")
     duck_under = (project.duck_under_narration_db if project and project.duck_under_narration_db is not None else
@@ -321,7 +332,7 @@ def cmd_merge(args) -> int:
     if args.burn_in or (project and project.captions == "burn_in"):
         if project is None:
             raise ConfigError("--burn-in에는 폰트 설정이 있는 --project가 필요합니다 (output.caption_style)")
-        burn_style = P.caption_style(P.make_context(Path(args.project)))
+        burn_style = P.caption_style(proj_ctx)
     if args.dry_run:
         _emit(args, {"would_run": "merge"}, f"[dry-run] {video.name} + {guide.name}, 오프셋 {args.offset or args.tone_at}, 원본 소리 {policy} -> {out}")
         return EXIT_OK
@@ -367,6 +378,27 @@ def cmd_align(args) -> int:
     return EXIT_OK
 
 
+def _parse_voices(spec: str | None, names: list[str]) -> dict[str, str]:
+    """`--voice`: 공급자가 하나면 음성 이름, 여러 개면 `kokoro=af_heart,gemini=Kore` (음성 이름은 공급자마다 다르다)."""
+    if not spec:
+        return {}
+    if "=" in spec:
+        out = {}
+        for part in spec.split(","):
+            k, sep, v = part.partition("=")
+            if not sep or not k.strip() or not v.strip():
+                raise ConfigError(f"--voice 형식 오류: {part!r} (예: kokoro=af_heart,gemini=Kore)")
+            out[k.strip()] = v.strip()
+        extra = sorted(set(out) - set(names))
+        if extra:
+            raise ConfigError(f"--voice에 --provider에 없는 공급자가 있습니다: {extra}")
+        return out
+    if len(names) != 1:
+        raise ConfigError("공급자가 여럿이면 --voice를 공급자별로 지정하세요 (예: --voice kokoro=af_heart,gemini=Kore). "
+                          "음성 이름은 공급자마다 다릅니다")
+    return {names[0]: spec}
+
+
 def cmd_benchmark(args) -> int:
     from .benchmark import run_benchmark
     cfg = load_config()
@@ -377,6 +409,7 @@ def cmd_benchmark(args) -> int:
         from .config import load_yaml
         acc = (load_yaml(Path(args.acceptance)) or {}).get("acceptance_wait")
     names = [n.strip() for n in args.provider.split(",") if n.strip()]
+    voices = _parse_voices(args.voice, names)
     if args.dry_run:
         _emit(args, {"would_run": "benchmark"}, f"[dry-run] {names}: 목표 {args.targets or '(공급자 기본)'}초 분량 합성 측정")
         return EXIT_OK
@@ -387,7 +420,7 @@ def cmd_benchmark(args) -> int:
         targets = args.targets or ("15" if net else "15,30,60")
         limit = args.max_sentences or (6 if net else None)      # 5.7 Phase 0: 동일 대본 6문장 비교
         listen = (root / "reports" / "listening" / name) if args.listen else None
-        rep = run_benchmark(cfg, ff, name, voice=args.voice if len(names) == 1 else None,
+        rep = run_benchmark(cfg, ff, name, voice=voices.get(name),
                             targets_s=[int(x) for x in targets.split(",")],
                             sentences_file=root / "benchmarks" / "sentences.txt", listen_dir=listen, acceptance=acc,
                             report_dir=root / "reports", listen_limit=limit)
@@ -667,7 +700,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("중단됨", file=sys.stderr)
         return EXIT_INTERRUPT
-    except (ScriptError, ConfigError, TimeError, ToolError, ProviderError, ProcessFailed, ValueError, FileNotFoundError) as e:
+    except (ScriptError, ConfigError, TimeError, ToolError, ProviderError, ProcessFailed, RemoteError, ValueError,
+            FileNotFoundError) as e:
         print(f"오류: {e}", file=sys.stderr)
         return EXIT_ERROR
 

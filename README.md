@@ -100,7 +100,7 @@ output:
 
 ```bash
 uv run avsync benchmark tts --provider kokoro --voice af_heart --listen        # RTF/메모리/콜드 스타트 + 청취 문장 25개
-uv run avsync benchmark tts --provider kokoro,gemini --listen                   # 같은 6문장 비교 (Phase 0)
+uv run avsync benchmark tts --provider kokoro,gemini --voice kokoro=af_heart,gemini=Kore --listen   # 같은 6문장 비교 (Phase 0; 음성은 공급자별로)
 ```
 
 ## BGM

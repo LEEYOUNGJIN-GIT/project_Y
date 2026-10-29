@@ -209,7 +209,7 @@ def test_run_status_fetch_register_and_discard(tmp_path, kaggle, ff, monkeypatch
     assert "voice_s3" in disc and "보컬" in disc["voice_s3"][0]
     assert rep["failed"][0]["name"] == "broken_s4" and rep["complete"] is True
     meta = next(lib.glob("good_s1_*.json")).read_text(encoding="utf-8")
-    assert '"generator": "ace-step-1.5"' in meta and "보장되지 않음" in meta and '"vocals": "no"' in meta
+    assert '"generator": "ace-step-1.5"' in meta and "보장되지 않음" in meta and '"vocals": "unknown"' in meta and '"vocals_hint": "no"' in meta
     assert not list(lib.glob("short_s2_*")) and not list(lib.glob("voice_s3_*"))        # 폐기된 곡은 등록하지 않음
 
 
@@ -230,3 +230,35 @@ def test_cli_remote_plan_and_dry_run(tmp_path, capsys):
     assert main(["bgm", "remote-run", str(p), "--dry-run"]) == 1              # owner 없음
     assert main(["bgm", "remote-run", str(p), "--owner", "me", "--dry-run"]) == 0
     assert main(["bgm", "remote-plan", str(write_plan(tmp_path, 'tracks:\n  - {id: a, duration_s: 15, prompt: "pad by Aphex Twin"}\n'))]) == 1
+
+
+def _write_one_track(src: Path, track_id: str = "good", seed: int = 1):
+    src.mkdir(exist_ok=True)
+    _tone_wav(src / f"{track_id}_s{seed}.wav", 12)
+    (src / f"{track_id}_s{seed}.json").write_text("{}", encoding="utf-8")
+    (src / "results.json").write_text(json.dumps([{"id": track_id, "seed": seed, "file": f"{track_id}_s{seed}.wav", "error": None}]),
+                                      encoding="utf-8")
+
+
+def test_fetch_does_not_reuse_previous_runs_output(tmp_path, kaggle, ff, monkeypatch):
+    """output 폴더를 비우지 않아 이전 실행의 results.json이 이번 결과로 읽히던 결함 (코드 리뷰)."""
+    plan = load_plan(write_plan(tmp_path, 'tracks:\n  - {id: good, duration_s: 12, prompt: "calm pad, instrumental", seeds: [1]}\n'))
+    dirs = RemoteDirs(tmp_path / "remote")
+    remote_run(plan, dirs, kaggle, owner="me", accelerator=None, revision=None, dry_run=False)
+    _write_one_track(tmp_path / "out_a")
+    monkeypatch.setenv("FAKE_KAGGLE_TRACKS", str(tmp_path / "out_a"))
+    assert [a["name"] for a in remote_fetch(dirs, kaggle, ff, load_config().gates, library=tmp_path / "lib")["accepted"]] == ["good_s1"]
+    empty = tmp_path / "out_b"; empty.mkdir()                       # 두 번째 실행은 아직 아무것도 내지 않음
+    monkeypatch.setenv("FAKE_KAGGLE_TRACKS", str(empty))
+    with pytest.raises(RemoteError, match="results.json이 없습니다"):
+        remote_fetch(dirs, kaggle, ff, load_config().gates, library=tmp_path / "lib")
+
+
+def test_fetch_rejects_results_that_are_not_in_the_plan(tmp_path, kaggle, ff, monkeypatch):
+    plan = load_plan(write_plan(tmp_path, 'tracks:\n  - {id: good, duration_s: 12, prompt: "calm pad, instrumental", seeds: [1]}\n'))
+    dirs = RemoteDirs(tmp_path / "remote")
+    remote_run(plan, dirs, kaggle, owner="me", accelerator=None, revision=None, dry_run=False)
+    _write_one_track(tmp_path / "out_c", track_id="ghost", seed=9)
+    monkeypatch.setenv("FAKE_KAGGLE_TRACKS", str(tmp_path / "out_c"))
+    rep = remote_fetch(dirs, kaggle, ff, load_config().gates, library=tmp_path / "lib2")
+    assert rep["accepted"] == [] and "계획" in rep["failed"][0]["error"] and not list((tmp_path / "lib2").glob("ghost*"))

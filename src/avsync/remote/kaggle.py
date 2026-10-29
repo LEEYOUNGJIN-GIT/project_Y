@@ -143,6 +143,7 @@ def remote_fetch(dirs: RemoteDirs, cli: KaggleCli, ff: FFmpeg, gates: dict, *, l
         raise RemoteError("실행 기록이 없습니다")
     st = read_json(dirs.state)
     plan = read_json(dirs.plan)
+    shutil.rmtree(dirs.output, ignore_errors=True)         # 이전 실행의 results.json/wav가 이번 결과로 읽히지 않게 (도구 소유 폴더)
     cli.output(st["ref"], dirs.output)
     base = dirs.output / "tracks" if (dirs.output / "tracks").is_dir() else dirs.output
     results_path = base / "results.json"
@@ -155,12 +156,15 @@ def remote_fetch(dirs: RemoteDirs, cli: KaggleCli, ff: FFmpeg, gates: dict, *, l
     g = gates["bgm"]
     for rec in results:
         name = f"{rec['id']}_s{rec['seed']}"
+        if rec["id"] not in specs:
+            failed.append({"name": name, "error": "실행 계획(plan.json)에 없는 id - 다른 실행의 결과일 수 있어 등록하지 않음"})
+            continue
         if not rec.get("file"):
             failed.append({"name": name, "error": rec.get("error")})
             continue
         wav = base / rec["file"]
         meta = read_json(wav.with_suffix(".json")) if wav.with_suffix(".json").is_file() else {}
-        spec = specs.get(rec["id"], {})
+        spec = specs[rec["id"]]
         reasons, warnings = [], []
         try:
             dur = probe_audio_duration_us(ff.tools, wav)
@@ -187,8 +191,9 @@ def remote_fetch(dirs: RemoteDirs, cli: KaggleCli, ff: FFmpeg, gates: dict, *, l
         note = (f"ACE-Step 1.5 생성(Kaggle 원격, 코드 MIT). prompt={spec.get('prompt')!r} seed={rec['seed']} "
                 f"dit={meta.get('dit_model')} rev={meta.get('repo_revision')}. 생성물의 저작권 보호 가능성·제3자 권리 비침해·"
                 f"플랫폼 콘텐츠 식별 무분쟁은 보장되지 않음(10장)")
-        info = import_bgm(ff, wav, note, "no" if voc.score < g["vocal_unknown_score"] else "unknown", library=library,
-                          extra={"generator": "ace-step-1.5", "prompt": spec.get("prompt"), "seed": rec["seed"],
+        hint = "no" if voc.score < g["vocal_unknown_score"] else "unknown"     # 실제 보컬 음악으로 검증되지 않은 휴리스틱 -> 힌트로만 기록
+        info = import_bgm(ff, wav, note, "unknown", library=library,
+                          extra={"vocals_hint": hint, "generator": "ace-step-1.5", "prompt": spec.get("prompt"), "seed": rec["seed"],
                                  "generation": meta, "vocal_heuristic": voc.as_dict(), "plan_hash": st["plan_hash"],
                                  "track_id": rec["id"]})
         info["warnings"] += warnings

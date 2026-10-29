@@ -22,6 +22,10 @@ def main() -> int:
             if msg["text"] == "__NOISE__":
                 print("Downloading en-core-web-sm ...")          # 라이브러리가 stdout에 쓰는 상황
                 sys.stdout.flush()
+            if msg["text"] == "__BRACE__":
+                print("{'warn': 'dict repr from a library'}")      # {로 시작하지만 프로토콜 응답이 아닌 줄
+                print("{not json at all")
+                sys.stdout.flush()
             if not msg.get("voice"):
                 reply = {"ok": False, "error": "voice_id가 지정되지 않았습니다"}
             else:

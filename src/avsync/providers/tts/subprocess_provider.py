@@ -20,6 +20,17 @@ from ...platform.process import _popen_kwargs, kill_tree
 from .base import ProviderError, TTSCapabilities, TTSRequest, TTSResult
 
 
+def _is_reply(line: str) -> bool:
+    """프로토콜 응답은 'ok' 키가 있는 JSON 객체다. 라이브러리가 찍은 `{'a': 1}` 같은 줄은 응답이 아니다."""
+    if not line.lstrip().startswith("{"):
+        return False
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        return False
+    return isinstance(obj, dict) and "ok" in obj
+
+
 class SubprocessTTSProvider:
     def __init__(self, command: Sequence[str | Path], *, cwd: Path | None = None, env: dict | None = None,
                  startup_timeout: float = 600.0):
@@ -86,7 +97,7 @@ class SubprocessTTSProvider:
         import sys
         for _ in range(500):
             line = p.stdout.readline()
-            if not line or line.lstrip().startswith("{"):
+            if not line or _is_reply(line):
                 return line
             sys.stderr.write(f"[worker stdout] {line}")
         raise ProviderError("워커가 JSON이 아닌 출력만 계속 보냅니다")

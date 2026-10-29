@@ -116,3 +116,34 @@ def _cfg_with_cache(tmp_path):
     y = (d / "defaults.yaml").read_text(encoding="utf-8").replace("model_cache: null", f"model_cache: '{(tmp_path / 'cache').as_posix()}'")
     (d / "defaults.yaml").write_text(y, encoding="utf-8")
     return d
+
+
+def test_timeout_is_retried_then_reported_with_cache_hint(env, ff, tmp_path):
+    """run()은 시간 초과에 ProcessFailed를 던진다 - 재시도 없이 일반 오류로 중단되던 결함 (코드 리뷰)."""
+    env.setenv("FAKE_MODE", "hang")
+    p = make(ff, tmp_path, max_retries=1, timeout_s=0.5)
+    with pytest.raises(ProviderError) as e:
+        p.synthesize(req(tmp_path))
+    assert p.attempts == 2 and "캐시" in str(e.value) and "0.5초" in str(e.value)
+
+
+def test_timeout_once_recovers(env, ff, tmp_path):
+    env.setenv("FAKE_MODE", "hang_once")
+    p = make(ff, tmp_path, max_retries=1, timeout_s=0.5)
+    assert p.synthesize(req(tmp_path)).duration_us > 0 and p.attempts == 2
+
+
+def test_voice_unavailable_is_not_treated_as_a_rate_limit(env, ff, tmp_path):
+    env.setenv("FAKE_MODE", "voice_unavailable")
+    p = make(ff, tmp_path, max_retries=2)
+    with pytest.raises(ProviderError) as e:
+        p.synthesize(req(tmp_path))
+    assert not isinstance(e.value, RateLimitError) and p.attempts == 1
+
+
+def test_http_503_is_retried_as_transient(env, ff, tmp_path):
+    env.setenv("FAKE_MODE", "http503")
+    p = make(ff, tmp_path, max_retries=2)
+    with pytest.raises(RateLimitError):
+        p.synthesize(req(tmp_path))
+    assert p.attempts == 3

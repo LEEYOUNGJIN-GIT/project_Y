@@ -83,14 +83,13 @@ def resolve_beats(ctx: P.Context, spec: GuideSpec) -> tuple[GuideSpec, dict | No
     if need_analysis:
         if bgm.source != "imported" or bgm.path is None or not bgm.path.is_file():
             raise P.ConfigError("breath.bpm: from_bgm / beat_align에는 audio.bgm.source: imported 와 존재하는 BGM 파일이 필요합니다")
+        from ..audio.beats import BeatInfo
         cache = ctx.path("cache", f"beats_{sha256_file(bgm.path)[:12]}.json")
-        if cache.is_file():
-            from ..audio.beats import BeatInfo
-            d = read_json(cache)
-            info = BeatInfo(d["bpm"], d["period_us"], d["phase_us"], d["confidence"], d["beats_us"], d["downbeat_offset"], d["notes"])
-        else:
-            info = analyze_file(ctx.ff, bgm.path, ctx.path("cache", "beats_work"))
-            write_json(cache, info.as_dict())
+        if not cache.is_file():
+            write_json(cache, analyze_file(ctx.ff, bgm.path, ctx.path("cache", "beats_work")).as_dict())
+        # 첫 실행과 캐시를 읽는 이후 실행이 같은 값을 쓰도록 항상 캐시(반올림된 값)에서 읽는다
+        d = read_json(cache)
+        info = BeatInfo(d["bpm"], d["period_us"], d["phase_us"], d["confidence"], d["beats_us"], d["downbeat_offset"], d["notes"])
     if spec.bpm == "from_bgm":
         if not info.has_beat:
             raise P.ConfigError(f"BGM에서 안정적인 박자를 찾지 못했습니다 ({'; '.join(info.notes)}). "
