@@ -1,15 +1,16 @@
 # 12.5 대표 샘플 초안. 문구와 발음은 청취 후 확정한다.
 approved: false
 voice: {provider: null, voice_id: null, base_speed: 0.95}
-pronunciations:        # 시작값. 값이 /.../ 이면 음소 표기(Kokoro), 아니면 철자 치환. 청취 후 확정
-  Ekam: "EH-kum"
-  Dve: "dveh"
+pronunciations:        # 값이 /.../ 이면 음소 표기(Kokoro), 아니면 철자 치환. Kokoro G2P 출력으로 고른 후보이며 청취 후 확정
+  Ekam: "EK-um"         # 'EH-kum'->'ehkum'은 /ˈAkəm/(에이)이 되어 의도와 어긋남. 'ekum'은 /ˈɛkəm/
+  Dve: "/dvˈA/"         # 철자 치환('dveh','dvay')은 d 뒤에 모음이 끼어듦. 음소 표기만 dv 연속을 유지
+  # Ashtau는 철자 그대로가 /ˈæʃtW/(아우)라 맞음. 'ASH-tow'->/ˈæʃtO/(오우)는 어긋남
   Trini: "TREE-nee"
   Chatvari: "chaht-VAH-ree"
   Pancha: "PUN-chah"
   Shat: "shut"
   Sapta: "SUP-tah"
-  Ashtau: "ASH-tow"
+  Ashtau: "ASH-tau"
   Nava: "NAH-vah"
 lines:
   - {id: l01, text: "Ekam. Inhale, arms up.",                       mood: calm}
