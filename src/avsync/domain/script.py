@@ -58,6 +58,7 @@ class Script:
     pronunciations: dict[str, str]
     lines: list[Line]
     no_narration: list[tuple[int, int]]
+    cue_words: list[str] = field(default_factory=list)   # 큐 단어 추가 지정(발음 사전 키는 자동으로 큐 단어)
 
     def by_id(self) -> dict[str, Line]:
         return {ln.id: ln for ln in self.lines}
@@ -183,4 +184,4 @@ def load_script(path: Path, *, require_at: bool, fps: Fraction | None = None) ->
     if problems:
         raise ScriptError(problems)
     return Script(approved=approved, voice=voice, pronunciations=pronunciations,
-                  lines=lines, no_narration=windows)
+                  lines=lines, no_narration=windows, cue_words=[str(w) for w in (data.get("cue_words") or [])])

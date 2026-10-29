@@ -18,7 +18,7 @@ from .schedule import GuidePlan, GuideSpec, build_plan, load_guide
 
 TONE_RATE = 48000
 # 소리를 바꾸는 코드 변경(무음 트리밍, 믹스 공식 등)이 있을 때 올린다. 올리면 가이드 해시가 바뀌어 재촬영 경고가 나온다.
-SOUND_ENGINE_VERSION = 2
+SOUND_ENGINE_VERSION = 3
 
 
 def write_tone(path: Path, hz: float, ms: int, fade_ms: int = 5) -> int:
@@ -139,7 +139,7 @@ def build_guide(ctx: P.Context, *, provider_name: str | None = None, dry_run: bo
         "schema": 1, "created": now_iso(), "hash": ghash, "hash8": h8, "approved": approved,
         "project_id": proj.project_id, "wav": str(wav), "m4a": str(m4a), "wav_sha256": sha256_file(wav),
         "total_us": plan.total_us, "count_in_us": plan.count_in_us, "count_us": plan.count_us,
-        "tone_at_us": plan.tone_at_us, "lead_in_us": plan.lead_in_us,
+        "tone_at_us": plan.tone_at_us, "tone_hz": gg["tone_hz"], "tone_ms": gg["tone_ms"], "lead_in_us": plan.lead_in_us,
         "steps": [dataclasses.asdict(s) for s in plan.steps],
         "narration_windows": mix["narration_windows"], "captions": captions,
         "loudness_target": mix["target"], "provider": fit["provider"]["name"],

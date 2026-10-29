@@ -14,6 +14,9 @@ SR = 24000
 
 
 def main() -> int:
+    # Windows 기본 입출력 인코딩은 시스템 코드페이지다. 한글 메시지·IPA 발음 표기를 위해 UTF-8로 고정한다.
+    for stream in (sys.stdin, sys.stdout):
+        stream.reconfigure(encoding="utf-8")
     pipeline = None
     version = "unknown"
     for raw in sys.stdin:

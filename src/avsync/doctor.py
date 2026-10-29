@@ -83,7 +83,6 @@ def run_doctor(cfg: Config | None = None, workdir: Path | None = None, write_rep
     reports = Path(cfg.root) / "reports"
     if ff:
         ver = ff.version()
-        filters = ff.filters()
         first = ver.splitlines()[0]
         lic = "GPL" if "--enable-gpl" in ver else "LGPL/기타"
         nonfree = "--enable-nonfree" in ver
@@ -91,9 +90,10 @@ def run_doctor(cfg: Config | None = None, workdir: Path | None = None, write_rep
         add("ffmpeg_license", "warn" if nonfree else "info",
             f"{lic} 구성{' + nonfree(재배포 불가, 개인 사용만)' if nonfree else ''} - 개인 사용 기록용 (문서 10장)")
         for f, why in REQUIRED_FILTERS.items():
-            add(f"filter:{f}", "pass" if f in filters else "fail", why)
+            add(f"filter:{f}", "pass" if ff.has_filter(f) else "fail", why)
         for f, why in OPTIONAL_FILTERS.items():
-            add(f"filter:{f}", "pass" if f in filters else "info", f"{'있음' if f in filters else '없음'} - {why}")
+            ok = ff.has_filter(f)
+            add(f"filter:{f}", "pass" if ok else "info", f"{'있음' if ok else '없음'} - {why}")
         amix_h = run([ff.tools.ffmpeg, "-hide_banner", "-h", "filter=amix"]).stdout
         add("amix:normalize", "pass" if "normalize" in amix_h else "fail", "amix normalize=0 옵션 필요 (FFmpeg 4.4+)")
         for enc in ("libx264", "aac"):

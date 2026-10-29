@@ -17,6 +17,7 @@ from ..video.render import mux
 
 def merge_guide(cfg, ff, *, video: Path, guide_wav: Path, out: Path, offset_us: int | None,
                 tone_at_us: int | None, first_mark_us: int | None, last_mark_us: int | None,
+                marks: dict[str, int] | None = None, stretch: bool = False,
                 original: str, trim_start_us: int, trim_end_us: int | None, accurate_trim: bool,
                 shot_hash8: str | None, preview_ok: bool, reframe: str, profile_name: str,
                 work: Path, duck_under_db: float) -> dict:
@@ -46,6 +47,31 @@ def merge_guide(cfg, ff, *, video: Path, guide_wav: Path, out: Path, offset_us: 
             raise P.ConfigError("이 가이드에는 시작 톤이 없어 --tone-at을 쓸 수 없습니다. --offset을 쓰세요")
         offset_us = tone_at_us - gj["tone_at_us"]
 
+    marks = dict(marks or {})
+    stretch_info: dict = {}
+    if stretch:
+        first_id, last_id = gj["steps"][0]["line"], gj["steps"][-1]["line"]
+        fm = first_mark_us if first_mark_us is not None else marks.get(first_id)
+        lm = last_mark_us if last_mark_us is not None else marks.get(last_id)
+        if fm is None or lm is None:
+            raise P.ConfigError("--stretch에는 첫 카운트와 마지막 카운트의 마크(--first-mark, --last-mark)가 모두 필요합니다")
+        g_first, g_last = gj["steps"][0]["start_us"], gj["steps"][-1]["start_us"]
+        if g_last <= g_first:
+            raise P.ConfigError("--stretch는 카운트가 둘 이상인 가이드에서만 쓸 수 있습니다")
+        scale = (lm - fm) / (g_last - g_first)
+        if not (STRETCH_MIN <= scale <= STRETCH_MAX):
+            raise P.ConfigError(f"드리프트 비율 {scale:.4f}이 허용 범위 [{STRETCH_MIN}, {STRETCH_MAX}] 밖입니다. "
+                                f"마크를 잘못 찍었거나 다른 가이드일 가능성이 큽니다 (보정하지 않음)")
+        work.mkdir(parents=True, exist_ok=True)
+        stretched = work / "guide_stretched.wav"
+        M.stretch_audio(ff, guide_wav, 1.0 / scale, stretched, work)
+        gj = scale_guide_meta(gj, scale)
+        guide_wav = stretched
+        offset_us = fm - gj["steps"][0]["start_us"]
+        stretch_info = {"scale": scale, "ppm": round((scale - 1) * 1e6), "first_mark_us": fm, "last_mark_us": lm}
+        notes.append(f"드리프트 보정: 가이드를 x{scale:.6f}로 시간 축소/확대({(scale - 1) * 100:+.3f}%, 피치 유지). "
+                     f"첫/마지막 마크는 정의상 일치하므로 독립 검증은 --mark로 중간 카운트를 찍어 확인할 것")
+
     end_us = trim_end_us if trim_end_us is not None else info.duration_us
     if end_us > info.duration_us:
         raise P.ConfigError(f"trim-end({fmt_time(end_us)})가 영상 길이({fmt_time(info.duration_us)})를 넘습니다")
@@ -71,7 +97,7 @@ def merge_guide(cfg, ff, *, video: Path, guide_wav: Path, out: Path, offset_us: 
     used_orig = None
     if original != "remove" and info.has_audio:
         raw = work / "original_raw.wav"
-        M.extract_original(ff, video, trim_start_us, D, raw, work)
+        M.extract_original(ff, video, trim_start_us, D, raw, work, stream_offset_us=info.audio_offset_us)
         if original == "keep":
             stems.append(raw)
         else:
@@ -113,26 +139,50 @@ def merge_guide(cfg, ff, *, video: Path, guide_wav: Path, out: Path, offset_us: 
     checks.append(Q.check_clipping(ff, out, g["mix"]["clip_peak_dbfs"]))
     tol = int(g["guide"]["drift_tolerance_s"] * 1_000_000)
     drift: dict = {"tolerance_us": tol}
-    for label, mark, step in (("first", first_mark_us, gj["steps"][0]), ("last", last_mark_us, gj["steps"][-1])):
-        if mark is None:
-            continue
+    by_step = {st["line"]: st for st in gj["steps"]}
+    to_check: list[tuple[str, int, dict]] = []
+    if first_mark_us is not None:
+        to_check.append(("first", first_mark_us, gj["steps"][0]))
+    if last_mark_us is not None:
+        to_check.append(("last", last_mark_us, gj["steps"][-1]))
+    for name, t in marks.items():
+        if name not in by_step:
+            raise P.ConfigError(f"--mark 단계 '{name}'이 가이드에 없습니다 (가능: {', '.join(by_step)})")
+        to_check.append((name, t, by_step[name]))
+    for label, mark, step in to_check:
         expected = offset_us + step["start_us"]
         d = mark - expected
         drift[label] = {"mark_us": mark, "expected_us": expected, "drift_us": d}
         checks.append(Q.Check(f"drift_{label}", "pass" if abs(d) <= tol else "fail",
                               f"{label} 표시 {fmt_time(mark)} / 기대 {fmt_time(expected)} / 어긋남 {d / 1000:+.0f}ms "
                               f"(허용 ±{tol / 1000:.0f}ms; + 는 영상 동작이 가이드보다 늦음)", d / 1e6))
-    if last_mark_us is None:
+    if last_mark_us is None and not stretch:
         notes.append("--last-mark가 없어 마지막 카운트의 어긋남(드리프트)을 측정하지 못함")
     status = Q.summarize(checks)
     report = {"schema": 1, "created": now_iso(), "status": status, "checks": [c.as_dict() for c in checks],
               "notes": notes, "offset_us": offset_us, "shift_us": shift, "guide_hash8": gj["hash8"],
               "render": r, "output": str(out), "output_sha256": sha256_file(out), "drift": drift,
-              "original_policy_applied": used_orig, "preview": not gj["approved"]}
+              "original_policy_applied": used_orig, "preview": not gj["approved"], "stretch": stretch_info}
     write_json(out.with_suffix(".qa.json"), report)
     out.with_suffix(".qa.md").write_text(
         Q.render_markdown(out.name, checks, Q.listening_checklist(not gj["approved"]), notes), encoding="utf-8")
     return report
+
+
+STRETCH_MIN, STRETCH_MAX = 0.98, 1.02          # 2% 밖은 마크 오류로 보고 거부 (시작값)
+
+
+def scale_guide_meta(gj: dict, scale: float) -> dict:
+    """가이드를 scale배로 늘였을 때의 메타(시각)를 같이 늘인다."""
+    g = dict(gj)
+    sc = lambda v: round(v * scale)       # noqa: E731
+    g["total_us"] = sc(gj["total_us"])
+    g["tone_at_us"] = sc(gj["tone_at_us"]) if gj["tone_at_us"] is not None else None
+    g["steps"] = [{**st, "start_us": sc(st["start_us"]), "end_us": sc(st["end_us"]), "speak_at_us": sc(st["speak_at_us"])}
+                  for st in gj["steps"]]
+    g["narration_windows"] = [[sc(a), sc(b)] for a, b in gj["narration_windows"]]
+    g["captions"] = [{**c, "start_us": sc(c["start_us"]), "end_us": sc(c["end_us"])} for c in gj["captions"]]
+    return g
 
 
 def parse_marks(values: dict, fps: Fraction | None) -> dict:

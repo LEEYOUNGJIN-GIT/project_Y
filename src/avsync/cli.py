@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 from . import pipeline as P
@@ -244,8 +245,28 @@ def cmd_merge(args) -> int:
     fps = info.fps
     off = parse_time(args.offset, fps=fps) if args.offset else None
     tone = parse_time(args.tone_at, fps=fps) if args.tone_at else None
+    if args.auto_align:
+        if off is not None or tone is not None:
+            raise ConfigError("--auto-align은 --offset/--tone-at과 함께 쓸 수 없습니다")
+        from .guide.align import find_tone
+        gjson = read_json(guide.with_suffix(".json"))
+        if gjson.get("tone_at_us") is None:
+            raise ConfigError("이 가이드에는 시작 톤이 없어 --auto-align을 쓸 수 없습니다")
+        hits = find_tone(ff, video, Path(tempfile.mkdtemp(prefix="avsync_align_")), freq_hz=gjson.get("tone_hz", 880.0),
+                         tone_ms=gjson.get("tone_ms", 100), stream_offset_us=info.audio_offset_us)
+        if not hits:
+            raise ConfigError("영상 소리에서 시작 톤을 찾지 못했습니다. 스피커로 톤을 녹음했는지 확인하거나 --offset을 직접 지정하세요")
+        print(f"자동 정렬: 톤 {fmt_time(hits[0].time_us)} (점수 {hits[0].score:.2f}, 후보 {len(hits)}개) -> "
+              f"오프셋 {fmt_time(hits[0].time_us - gjson['tone_at_us'])}", file=sys.stderr)
+        tone = hits[0].time_us
     if (off is None) == (tone is None):
-        raise ConfigError("--offset 과 --tone-at 중 정확히 하나를 지정하세요")
+        raise ConfigError("--offset, --tone-at, --auto-align 중 정확히 하나를 지정하세요")
+    marks = {}
+    for m in args.mark or []:
+        name, _, t = m.partition("=")
+        if not t:
+            raise ConfigError(f"--mark는 단계=시각 형식이어야 합니다: {m!r} (예: l06=01:00.2)")
+        marks[name] = parse_time(t, fps=fps)
     project = None
     if args.project:
         project = P.make_context(Path(args.project)).project
@@ -260,6 +281,7 @@ def cmd_merge(args) -> int:
         cfg, ff, video=video, guide_wav=guide, out=out, offset_us=off, tone_at_us=tone,
         first_mark_us=parse_time(args.first_mark, fps=fps) if args.first_mark else None,
         last_mark_us=parse_time(args.last_mark, fps=fps) if args.last_mark else None,
+        marks=marks, stretch=args.stretch,
         original=policy, trim_start_us=parse_time(args.trim_start, fps=fps) if args.trim_start else 0,
         trim_end_us=parse_time(args.trim_end, fps=fps) if args.trim_end else None,
         accurate_trim=not args.keyframe_trim, shot_hash8=args.shot_hash, preview_ok=args.preview,
@@ -272,6 +294,29 @@ def cmd_merge(args) -> int:
     rows.append(f"종합: {rep['status'].upper()}  출력: {rep['output']}  (영상 {rep['render']['render_mode']})")
     _emit(args, rep, "\n".join(rows))
     return EXIT_CONTENT if rep["status"] == "fail" else EXIT_OK
+
+
+def cmd_align(args) -> int:
+    from .guide.align import find_tone
+    cfg = load_config()
+    ff = FFmpeg(find_tools(cfg))
+    gj = read_json(Path(args.guide).with_suffix(".json"))
+    if gj.get("tone_at_us") is None:
+        raise ConfigError("이 가이드에는 시작 톤이 없습니다")
+    from .video.probe import probe_video
+    info = probe_video(ff.tools, Path(args.video))
+    hits = find_tone(ff, Path(args.video), Path(tempfile.mkdtemp(prefix="avsync_align_")),
+                     freq_hz=gj.get("tone_hz", 880.0), tone_ms=gj.get("tone_ms", 100),
+                     stream_offset_us=info.audio_offset_us)
+    res = {"hits": [dict(h.as_dict(), offset_us=h.time_us - gj["tone_at_us"]) for h in hits]}
+    if not hits:
+        _emit(args, res, "시작 톤을 찾지 못했습니다. 이어폰만 쓰면 톤이 녹음되지 않습니다. 스피커로 시작 톤을 짧게 틀거나 --offset을 직접 찾으세요.")
+        return EXIT_CONTENT
+    rows = [f"후보 {i + 1}: 톤 {fmt_time(h.time_us)} 점수 {h.score:.2f} 톤성 {h.tonality:.2f} 대비 {h.contrast_db:.0f}dB -> "
+            f"--offset {fmt_time(h.time_us - gj['tone_at_us'])}" for i, h in enumerate(hits)]
+    rows.append("후보가 여러 개면 영상에서 실제 톤 위치를 눈으로 확인하세요 (자동 정렬은 가장 높은 점수를 씁니다).")
+    _emit(args, res, "\n".join(rows))
+    return EXIT_OK
 
 
 def cmd_benchmark(args) -> int:
@@ -347,6 +392,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--guide", required=True, help="guide 명령이 내보낸 WAV (옆의 .json 필요)")
     sp.add_argument("--offset", help="raw 영상 기준, 가이드 0초가 놓이는 시각 (예: 00:03.240, 97f, -00:01.0)")
     sp.add_argument("--tone-at", help="영상에서 찾은 시작 톤(또는 첫 동작) 시각. offset = tone-at - 가이드의 톤 위치")
+    sp.add_argument("--auto-align", action="store_true", help="영상 소리에서 시작 톤을 찾아 오프셋을 자동 결정 (톤이 녹음된 경우만)")
+    sp.add_argument("--stretch", action="store_true", help="첫/마지막 마크로 기기 간 드리프트를 계산해 가이드를 미세 보정 (atempo)")
+    sp.add_argument("--mark", action="append", help="단계=시각 (예: l06=01:00.2). 중간 카운트의 어긋남을 독립 검증. 반복 가능")
     sp.add_argument("--first-mark", help="첫 카운트 동작이 시작되는 영상 시각 (정렬 검증용)")
     sp.add_argument("--last-mark", help="마지막 카운트 동작이 시작되는 영상 시각 (드리프트 측정용)")
     sp.add_argument("--trim-start"), sp.add_argument("--trim-end")
@@ -356,6 +404,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--preview", action="store_true", help="미승인 가이드 허용")
     sp.add_argument("--reframe", choices=["none", "blur_pad", "crop_center", "pad_solid"])
     sp.add_argument("--out")
+    sp = add("align", cmd_align, "[audio-first] 영상 소리에서 가이드 시작 톤을 찾아 오프셋 제안")
+    sp.add_argument("--video", required=True)
+    sp.add_argument("--guide", required=True)
     sp = add("tts", cmd_tts, "[video-first] 합성 + 길이 맞춤")
     g = sp.add_mutually_exclusive_group(required=True)
     g.add_argument("--all", action="store_true")

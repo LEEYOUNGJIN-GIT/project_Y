@@ -118,11 +118,21 @@ def apply_envelope(ff: FFmpeg, src: Path, env: Path, out: Path, work: Path) -> N
     _run_script(ff, [src, env], "[0:a][1:a]amultiply[o]", "o", out, work, context="덕킹 적용")
 
 
-def extract_original(ff: FFmpeg, media: Path, start_us: int, duration_us: int, out: Path, work: Path) -> None:
-    """원본 영상의 소리를 [start, start+duration] 구간으로 뽑아 48 kHz 스테레오로 맞춘다."""
+def extract_original(ff: FFmpeg, media: Path, start_us: int, duration_us: int, out: Path, work: Path, *,
+                     stream_offset_us: int = 0) -> None:
+    """원본 영상의 소리를 [start, start+duration] (영상 시간) 구간으로 뽑아 48 kHz 스테레오로 맞춘다.
+
+    stream_offset_us: 디코드한 오디오 0초가 영상 시간의 몇 us인지(오디오 start_time - 영상 start_time).
+    """
     total = us_to_samples(duration_us, RATE)
     s = start_us / US
-    script = (f"[0:a]atrim=start={s:.6f},asetpts=PTS-STARTPTS,{_FMT},"
+    if stream_offset_us > 0:
+        pre = f"adelay=delays={us_to_samples(stream_offset_us, RATE)}S:all=1,"
+    elif stream_offset_us < 0:
+        pre = f"atrim=start_sample={us_to_samples(-stream_offset_us, RATE)},asetpts=PTS-STARTPTS,"
+    else:
+        pre = ""
+    script = (f"[0:a]{_FMT},{pre}atrim=start={s:.6f},asetpts=PTS-STARTPTS,"
               f"apad=whole_len={total},atrim=end_sample={total}[o]")
     _run_script(ff, [media], script, "o", out, work, context="원본 소리 추출")
 
@@ -131,6 +141,13 @@ def sum_stems(ff: FFmpeg, stems: list[Path], out: Path, work: Path) -> None:
     labels = "".join(f"[{i}:a]" for i in range(len(stems)))
     script = f"{labels}amix=inputs={len(stems)}:normalize=0:duration=longest:dropout_transition=0[o]"
     _run_script(ff, stems, script, "o", out, work, context="스템 합산")
+
+
+def stretch_audio(ff: FFmpeg, src: Path, tempo: float, out: Path, work: Path) -> None:
+    """피치를 유지한 채 길이를 1/tempo배로 만든다 (atempo, 범위 0.5-2.0). 미세 드리프트 보정용."""
+    if not 0.5 <= tempo <= 2.0:
+        raise ValueError(f"atempo 범위(0.5-2.0) 밖: {tempo}")
+    _run_script(ff, [src], f"[0:a]atempo={tempo:.8f}[o]", "o", out, work, context="드리프트 보정(atempo)")
 
 
 def align_audio(ff: FFmpeg, src: Path, shift_us: int, duration_us: int, out: Path, work: Path) -> None:

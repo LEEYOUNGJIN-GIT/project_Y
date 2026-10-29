@@ -109,8 +109,11 @@ def run_tts(ctx: Context, timeline: dict, script: Script, *, provider_name: str 
                 f"voice_id가 정해지지 않았습니다. 후보 음색을 청취한 뒤 script.yaml의 voice.voice_id를 지정하세요 ({name}).")
         g = ctx.gates["tts"]
         pause = int(ctx.tts_cfg.get("pause_between_sentences_ms", g["sentence_pause_ms"]))
+        emph = ctx.tts_cfg.get("emphasis")
         synth = Synthesizer(provider, ctx.path("cache", "tts"), voice_id=voice, lang="en-US",
-                            pronunciations=script.pronunciations, sentence_pause_ms=pause)
+                            pronunciations=script.pronunciations, sentence_pause_ms=pause,
+                            emphasis_pause_ms=int(ctx.tts_cfg.get("emphasis_pause_ms", 150)) if emph == "pause_only" else None,
+                            cue_speed=ctx.tts_cfg.get("cue_speed"), cue_words=script.cue_words, max_speed=g["max_speed"])
         warnings: list[str] = []
         by_id = script.by_id()
         items = timeline["items"]
@@ -140,8 +143,8 @@ def run_tts(ctx: Context, timeline: dict, script: Script, *, provider_name: str 
         finalize_flags(records, timeline["duration_us"])
         if caps.emotion is False and any(l.mood != "calm" for l in script.lines):
             warnings.append("공급자가 감정 제어를 지원하지 않아 mood는 속도 배율에만 반영됨")
-        if any(l.emphasis for l in script.lines):
-            warnings.append("emphasis는 MVP에서 미구현이라 무시됨 (docs/open_questions.md)")
+        if any(l.emphasis for l in script.lines) and ctx.tts_cfg.get("emphasis") != "pause_only":
+            warnings.append("톤 프리셋의 emphasis가 pause_only가 아니라 emphasis 지정이 무시됨")
         for r in records:
             warnings += r["audio"].get("warnings", [])
         report = {
@@ -237,7 +240,9 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
 
     if original_media is not None and original_has_audio:
         raw = work / "original_raw.wav"
-        M.extract_original(ff, original_media, 0, D, raw, work)
+        vid = timeline.get("video") or {}
+        M.extract_original(ff, original_media, 0, D, raw, work,
+                           stream_offset_us=vid.get("audio_start_us", 0) - vid.get("video_start_us", 0))
         no_narr = [tuple(w) for w in timeline.get("no_narration", [])]
         policy = original_policy
         if policy == "keep":

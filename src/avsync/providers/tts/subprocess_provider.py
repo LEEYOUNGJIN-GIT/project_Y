@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Sequence
@@ -30,12 +31,16 @@ class SubprocessTTSProvider:
         self._caps: TTSCapabilities | None = None
         self.cold_start_s: float | None = None
 
+    def _child_env(self) -> dict:
+        """워커 입출력은 항상 UTF-8. Windows는 기본이 시스템 코드페이지(cp1252/cp949)라 한글·IPA가 깨지거나 워커가 죽는다."""
+        return {**os.environ, **(self.env or {}), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
     def _start(self) -> None:
         import time
         t0 = time.perf_counter()
         self._proc = subprocess.Popen(  # noqa: S603 - 인자 배열
             self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
-            cwd=self.cwd, env=self.env, text=True, encoding="utf-8", bufsize=1,
+            cwd=self.cwd, env=self._child_env(), text=True, encoding="utf-8", bufsize=1,
             **_popen_kwargs(low_priority=True),
         )
         reply = self._call({"op": "hello"})

@@ -319,3 +319,87 @@ def test_original_policies_via_stems(af_project, ff, video916, tmp_path):
     r2 = measure_rms_db(ff, stems["duck"] / "original_raw.wav", quiet_a, 1_000_000)
     d2 = measure_rms_db(ff, stems["duck"] / "original_ducked.wav", quiet_a, 1_000_000)
     assert r2 == pytest.approx(d2, abs=0.2)
+
+
+# ------------------------------------------------------------------ align / stretch
+
+def make_raw_with_guide(ff, wav: Path, out: Path, delay_s: float, tempo: float = 1.0, seconds: int = 24):
+    """가이드 소리가 delay_s 뒤에 (옵션: tempo배 속도로) 스피커로 녹음된 것처럼 잡음과 섞은 촬영본."""
+    ff.run(["-f", "lavfi", "-i", f"testsrc2=s=360x640:r=30:d={seconds}", "-i", str(wav),
+            "-f", "lavfi", "-i", f"anoisesrc=d={seconds}:c=pink:a=0.01",
+            "-filter_complex", f"[1:a]atempo={tempo},adelay={int(delay_s * 1000)}:all=1,aformat=channel_layouts=stereo[g];"
+                               f"[2:a]aformat=channel_layouts=stereo[n];[g][n]amix=inputs=2:normalize=0,atrim=0:{seconds}[a]",
+            "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", str(out)])
+
+
+def test_align_recovers_offset_from_recorded_tone(af_project, ff, tmp_path, capsys):
+    assert cli("guide", "--project", af_project) == 0
+    wav, gj = guide_files(af_project)
+    raw = tmp_path / "raw_tone.mp4"
+    make_raw_with_guide(ff, wav, raw, delay_s=2.5)
+    capsys.readouterr()
+    assert cli("align", "--video", raw, "--guide", wav, "--json") == 0
+    hit = json.loads(capsys.readouterr().out)["hits"][0]
+    assert abs(hit["offset_us"] - 2_500_000) <= 20_000                                   # +-20ms
+    out = tmp_path / "auto.mp4"
+    assert cli("merge", "--video", raw, "--guide", wav, "--auto-align", "--out", out, "--original", "remove") in (0, 2)
+    assert abs(read_json(out.with_suffix(".qa.json"))["offset_us"] - 2_500_000) <= 20_000
+
+
+def test_align_reports_failure_when_no_tone(af_project, ff, video916, capsys):
+    cli("guide", "--project", af_project)
+    wav, _ = guide_files(af_project)
+    capsys.readouterr()
+    assert cli("align", "--video", video916, "--guide", wav) == 2                         # 120Hz 환경음뿐: 톤 없음
+    assert cli("merge", "--video", video916, "--guide", wav, "--auto-align") == 1
+
+
+def test_stretch_corrects_clock_drift_and_independent_mark_verifies(af_project, ff, video916, tmp_path):
+    cli("guide", "--project", af_project)
+    wav, gj = guide_files(af_project)
+    # 촬영 기기 클록이 1.8% 빠르게 가는 상황: 영상 시각 = 0.5 + 1.018 * 가이드 시각
+    t = lambda g: f"00:{0.5 + 1.018 * g:06.3f}"      # noqa: E731
+    base = ["--video", video916, "--guide", wav, "--offset", "0.5", "--original", "remove",
+            "--first-mark", t(3.0), "--last-mark", t(9.0), "--mark", f"l02={t(6.0)}"]
+    # 보정 없이: 마지막 마크가 162ms 어긋나 허용치(150ms)를 넘는다
+    assert cli("merge", *base, "--out", tmp_path / "nostretch.mp4") == 2
+    rep0 = read_json((tmp_path / "nostretch.qa.json"))
+    assert {c["name"]: c for c in rep0["checks"]}["drift_last"]["status"] == "fail"
+    # 보정: 첫/마지막 마크로 비율을 구해 가이드를 늘이면, 마크에 쓰지 않은 중간 카운트(l02)도 일치해야 한다
+    assert cli("merge", *base, "--stretch", "--out", tmp_path / "s.mp4") == 0
+    rep = read_json(tmp_path / "s.qa.json")
+    by = {c["name"]: c for c in rep["checks"]}
+    assert rep["stretch"]["scale"] == pytest.approx(1.018, abs=2e-5)
+    assert by["drift_l02"]["status"] == "pass" and abs(by["drift_l02"]["value"]) < 0.005            # 5ms 이내
+    d = float(run([ff.tools.ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                   str(tmp_path / ".avsync_merge_s" / "guide_stretched.wav")], check=True).stdout)
+    assert d == pytest.approx(16.0 * 1.018, abs=0.03)                                            # 길이가 비율만큼 늘어남 (atempo 처리 단위 오차 ~10ms)
+
+
+def test_stretch_rejects_implausible_marks(af_project, video916, tmp_path):
+    cli("guide", "--project", af_project)
+    wav, _ = guide_files(af_project)
+    rc = cli("merge", "--video", video916, "--guide", wav, "--offset", "0.5", "--original", "remove",
+             "--first-mark", "00:03.5", "--last-mark", "00:20.0", "--stretch", "--out", tmp_path / "x.mp4")
+    assert rc == 1                                                                                # 비율이 범위 밖: 보정하지 않고 거부
+    assert cli("merge", "--video", video916, "--guide", wav, "--offset", "0.5", "--original", "remove",
+               "--stretch", "--out", tmp_path / "y.mp4") == 1                                       # 마크 없이 stretch 불가
+
+
+def test_audio_start_offset_is_respected_for_original_audio(tmp_path, ff):
+    """오디오 스트림이 영상보다 0.5초 늦게 시작하는 파일: 원본 소리가 영상 시간 기준으로 놓여야 한다."""
+    from avsync.audio import mix as M
+    from avsync.config import load_config
+    from avsync.platform.ffmpeg import find_tools
+    from avsync.video.probe import probe_video
+    vid = tmp_path / "late_audio.mp4"
+    ff.run(["-f", "lavfi", "-i", "testsrc2=s=64x64:r=30:d=3", "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=f=440:d=2",
+            "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-c:a", "aac", str(vid)])
+    info = probe_video(find_tools(load_config()), vid)
+    assert abs(info.audio_offset_us - 500_000) < 60_000
+    out = tmp_path / "orig.wav"
+    M.extract_original(ff, vid, 0, 3_000_000, out, tmp_path / "w", stream_offset_us=info.audio_offset_us)
+    early = measure_rms_db(ff, out, 100_000, 300_000)        # 영상 시간 0.1-0.4초: 아직 소리 없음
+    later = measure_rms_db(ff, out, 800_000, 400_000)        # 0.8-1.2초: 소리 있음
+    assert (early is None or early < -60) and later is not None and later > -30

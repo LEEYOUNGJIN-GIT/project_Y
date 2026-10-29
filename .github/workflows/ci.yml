@@ -32,7 +32,6 @@ jobs:
   kokoro-smoke:
     name: kokoro-smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs: test
     if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
     strategy:
       fail-fast: false

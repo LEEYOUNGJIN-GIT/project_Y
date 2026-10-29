@@ -62,6 +62,11 @@ class FFmpeg:
     def version(self) -> str:
         return run([self.tools.ffmpeg, "-version"], check=True).stdout
 
+    def has_filter(self, name: str) -> bool:
+        """`-filters` 출력은 버전마다 열 형식이 달라(9.x에서 확인) 파싱 대신 `-h filter=NAME`으로 존재를 확인한다."""
+        out = run([self.tools.ffmpeg, "-hide_banner", "-h", f"filter={name}"])
+        return f"Filter {name}" in out.stdout
+
     def filters(self) -> set[str]:
         out = run([self.tools.ffmpeg, "-hide_banner", "-filters"], check=True).stdout
         names = set()

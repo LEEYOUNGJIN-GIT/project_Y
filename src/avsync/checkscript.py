@@ -29,8 +29,11 @@ def check_script(script: Script, tone_tts: dict, wps: list[float], *, budgets_us
                 add("info", ln.id, f"{words}단어 / 허용 {sec:.1f}s: 추정 범위 경계({lo}-{hi}단어/초). 합성 후 확인")
         if ln.mood not in moods:
             add("warn", ln.id, f"mood '{ln.mood}'은 프리셋에 없음 -> 배율 1.0")
-        if ln.emphasis:
-            add("warn", ln.id, "emphasis는 MVP에서 미구현이라 무시됨")
+        for w in ln.emphasis:
+            if w.lower() not in ln.text.lower():
+                add("warn", ln.id, f"emphasis '{w}'가 문구에 없음")
+        if ln.emphasis and tone_tts.get("emphasis") != "pause_only":
+            add("warn", ln.id, "톤 프리셋의 emphasis가 pause_only가 아니라 emphasis 지정이 무시됨")
         if ln.at_us is not None and audio_first:
             add("info", ln.id, f"audio-first에서는 at({fmt_time(ln.at_us)})이 무시되고 guide.yaml이 시각을 정함")
     used = " ".join(l.text.lower() for l in script.lines)
