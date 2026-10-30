@@ -54,3 +54,25 @@ jobs:
           name: kokoro-smoke-${{ matrix.os }}
           path: ci_artifacts/
           if-no-files-found: warn
+
+  voice-lab:
+    name: voice-lab (windows-latest)
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install FFmpeg (Windows)
+        run: choco install ffmpeg -y --no-progress
+      - run: uv sync
+      - name: Kokoro 환경 설치
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts\setup_kokoro.ps1
+      - name: 요가 큐잉 목소리 변형 합성 (청취용)
+        run: uv run python scripts/ci_voice_lab.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-lab
+          path: ci_artifacts/
+          if-no-files-found: warn
