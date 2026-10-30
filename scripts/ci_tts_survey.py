@@ -24,6 +24,10 @@ KEYWORDS = {
     "CPU": r"\bcpu\b", "ONNX/GGUF": r"onnx|gguf|llama\.cpp", "실시간": r"real-?time",
 }
 SORTS = ("downloads", "likes", "trending_score")
+# 1차 표(run 32)에서 '감정/스타일 지시/표현력' 키워드가 있고 허용형 라이선스·영어·4GB 이하인 후보 + 비교 기준. 마지막은 기억에 있던 이름이라 존재 여부부터 확인한다.
+SHORTLIST = ["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", "openbmb/VoxCPM-0.5B", "inclusionAI/Ming-3.0-tts-0.5B", "Tesslate/Lure-TTS-0.6B",
+             "Zyphra/Zonos-v0.1-hybrid", "microsoft/VibeVoice-Realtime-0.5B", "myshell-ai/MeloTTS-English", "ResembleAI/chatterbox"]
+CARD_LINES = 130
 PER_SORT = 40
 
 
@@ -104,7 +108,23 @@ def main() -> int:
     (OUT / "README.md").write_text("\n".join(md) + "\n", encoding="utf-8")
     summary("### TTS 후보 조사 - 1순위 필터 통과\n" + head + "\n" + "\n".join(line(r) for r in small))
     summary(f"\n전체 {len(rows)}개는 아티팩트 tts_survey/README.md 참조. " + " ".join(notes))
+    dump_cards()
     return 0
+
+
+def dump_cards() -> None:
+    """후보 모델 카드의 앞부분(설치·사용법·스타일 지시 방법)을 로그와 아티팩트로 남긴다. 이 개발 환경에서는 huggingface.co를 읽을 수 없다."""
+    (OUT / "cards").mkdir(exist_ok=True)
+    for mid in SHORTLIST:
+        try:
+            raw = Path(hf_hub_download(mid, "README.md")).read_text(encoding="utf-8", errors="replace")
+        except Exception as e:  # noqa: BLE001
+            summary(f"=== CARD {mid}: 카드를 읽지 못함 ({type(e).__name__}: {str(e)[:100]}) ===")
+            continue
+        lines = [l for l in raw.splitlines() if not re.match(r"\s*(<img|!\[|<p align|<div|</div|<a href=\"https://.*badge)", l)]
+        excerpt = "\n".join(lines[:CARD_LINES])[:9000]
+        (OUT / "cards" / (mid.replace("/", "__") + ".md")).write_text(raw, encoding="utf-8")
+        print(f"=== CARD {mid} ===\n{excerpt}\n=== END {mid} ===", flush=True)
 
 
 if __name__ == "__main__":
