@@ -92,3 +92,32 @@ jobs:
           name: tts-survey
           path: ci_artifacts/
           if-no-files-found: warn
+
+  repo-docs:
+    name: repo-docs (candidate GitHub READMEs)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    steps:
+      - uses: actions/checkout@v4
+      - run: python scripts/ci_repo_docs.py
+
+  qwen-trial:
+    name: qwen-trial (windows-latest, CPU)
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Qwen3-TTS 설치 (Python 3.12, CPU)
+        run: |
+          uv venv .venv_qwen --python 3.12
+          uv pip install --python .venv_qwen\Scripts\python.exe qwen-tts soundfile psutil
+      - name: Qwen3-TTS CPU 시험 합성
+        run: .venv_qwen\Scripts\python.exe scripts\ci_qwen_trial.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qwen-trial
+          path: ci_artifacts/
+          if-no-files-found: warn
