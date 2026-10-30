@@ -142,3 +142,24 @@ jobs:
           name: qwen-design-trial
           path: ci_artifacts/
           if-no-files-found: warn
+
+  qwen-clone-trial:
+    name: qwen-clone-trial (consistency: design vs clone, windows CPU)
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Qwen3-TTS 설치 (Python 3.12, CPU)
+        run: |
+          uv venv .venv_qwen --python 3.12
+          uv pip install --python .venv_qwen\Scripts\python.exe qwen-tts soundfile psutil huggingface_hub
+      - name: 화자 일관성 시험 (줄마다 설계 vs 한 기준 음성 복제)
+        run: .venv_qwen\Scripts\python.exe scripts\ci_qwen_clone_trial.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qwen-clone-trial
+          path: ci_artifacts/
+          if-no-files-found: warn
