@@ -76,3 +76,19 @@ jobs:
           name: voice-lab
           path: ci_artifacts/
           if-no-files-found: warn
+
+  tts-survey:
+    name: tts-survey (HuggingFace candidates)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: TTS 후보 조사 (HuggingFace 직접 조회)
+        run: uv run --no-project --with huggingface_hub python scripts/ci_tts_survey.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tts-survey
+          path: ci_artifacts/
+          if-no-files-found: warn
