@@ -1,6 +1,7 @@
 """단계별 오케스트레이션: 타임라인 -> TTS/fit -> 믹스 -> 렌더 -> manifest. CLI는 이 함수들을 호출만 한다."""
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,8 @@ def make_context(project_path: Path) -> Context:
     cfg = load_config()
     project = load_project(project_path)
     project.ensure_dirs()
+    for w in project.warnings or []:
+        print(f"경고(project.yaml) {w}", file=sys.stderr)
     return Context(cfg, FFmpeg(find_tools(cfg)), project, cfg.tone(project.tone), cfg.gates)
 
 
@@ -109,8 +112,11 @@ def run_tts(ctx: Context, timeline: dict, script: Script, *, provider_name: str 
                 f"voice_id가 정해지지 않았습니다. 후보 음색을 청취한 뒤 script.yaml의 voice.voice_id를 지정하세요 ({name}).")
         g = ctx.gates["tts"]
         pause = int(ctx.tts_cfg.get("pause_between_sentences_ms", g["sentence_pause_ms"]))
+        emph = ctx.tts_cfg.get("emphasis")
         synth = Synthesizer(provider, ctx.path("cache", "tts"), voice_id=voice, lang="en-US",
-                            pronunciations=script.pronunciations, sentence_pause_ms=pause)
+                            pronunciations=script.pronunciations, sentence_pause_ms=pause,
+                            emphasis_pause_ms=int(ctx.tts_cfg.get("emphasis_pause_ms", 150)) if emph == "pause_only" else None,
+                            cue_speed=ctx.tts_cfg.get("cue_speed"), cue_words=script.cue_words, max_speed=g["max_speed"])
         warnings: list[str] = []
         by_id = script.by_id()
         items = timeline["items"]
@@ -140,8 +146,8 @@ def run_tts(ctx: Context, timeline: dict, script: Script, *, provider_name: str 
         finalize_flags(records, timeline["duration_us"])
         if caps.emotion is False and any(l.mood != "calm" for l in script.lines):
             warnings.append("공급자가 감정 제어를 지원하지 않아 mood는 속도 배율에만 반영됨")
-        if any(l.emphasis for l in script.lines):
-            warnings.append("emphasis는 MVP에서 미구현이라 무시됨 (docs/open_questions.md)")
+        if any(l.emphasis for l in script.lines) and ctx.tts_cfg.get("emphasis") != "pause_only":
+            warnings.append("톤 프리셋의 emphasis가 pause_only가 아니라 emphasis 지정이 무시됨")
         for r in records:
             warnings += r["audio"].get("warnings", [])
         report = {
@@ -189,7 +195,7 @@ def fit_has_errors(report: dict) -> bool:
 
 def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Path,
             original_media: Path | None, original_policy: str, original_has_audio: bool,
-            cue_items: list[BusItem] | None = None) -> dict:
+            cue_items: list[BusItem] | None = None, bgm_head_trim_us: int = 0) -> dict:
     ff, tone, g = ctx.ff, ctx.tone, ctx.gates["mix"]
     D = timeline["duration_us"]
     work.mkdir(parents=True, exist_ok=True)
@@ -211,7 +217,12 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
         if bpath is None or not bpath.is_file():
             raise ConfigError(f"BGM 파일이 없습니다: {bpath}")
         fit_bgm = work / "bgm_fit.wav"
-        info = M.prepare_bgm(ff, bpath, probe_audio_duration_us(ctx.ff.tools, bpath), D, fit_bgm, work,
+        src_bgm, src_dur = bpath, probe_audio_duration_us(ctx.ff.tools, bpath)
+        if bgm_head_trim_us > 0:
+            src_bgm = work / "bgm_trimmed.wav"
+            M.trim_head(ff, bpath, bgm_head_trim_us, src_bgm, work)
+            src_dur -= bgm_head_trim_us
+        info = M.prepare_bgm(ff, src_bgm, src_dur, D, fit_bgm, work,
                              fade_in_s=float(bgm_cfg.get("fade_in_s", 1.0)),
                              fade_out_s=float(bgm_cfg.get("fade_out_s", 2.0)),
                              midrange_cut_db=float(bgm_cfg.get("midrange_1_4khz_cut_db", 0.0)))
@@ -231,13 +242,16 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
                       "gain_db": round(gain, 2), "narration_lufs": n_lufs, "bgm_lufs": b_lufs,
                       "duck_db": duck_db, "license_note": proj_bgm.license_note}
         if info["loops"] > 1:
-            rep["warnings"].append(f"BGM이 짧아 {info['loops']}회 크로스페이드 루프함")
+            rep["warnings"].append(f"BGM이 짧아 {info['loops']}회 크로스페이드 루프함"
+                                   + (" - 박 정렬은 첫 구간에서만 보장됨(이음매 이후는 보장 안 됨)" if bgm_head_trim_us > 0 else ""))
         if not proj_bgm.license_note:
             rep["warnings"].append("BGM license_note가 비어 있음 (출처·라이선스를 기록하세요)")
 
     if original_media is not None and original_has_audio:
         raw = work / "original_raw.wav"
-        M.extract_original(ff, original_media, rep.get("original_start_us", 0), D, raw, work)
+        vid = timeline.get("video") or {}
+        M.extract_original(ff, original_media, 0, D, raw, work,
+                           stream_offset_us=vid.get("audio_start_us", 0) - vid.get("video_start_us", 0))
         no_narr = [tuple(w) for w in timeline.get("no_narration", [])]
         policy = original_policy
         if policy == "keep":
@@ -271,7 +285,9 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
     tp = ctx.project.true_peak_dbfs if ctx.project.true_peak_dbfs is not None else g["true_peak_dbfs"]
     ln = M.normalize_master(ff, pre, out_wav, lufs=lufs, true_peak=tp, budget_db=g["limiter_budget_db"])
     if not ln["reached_target"]:
-        rep["warnings"].append(f"목표 {lufs} LUFS에 못 미침({ln['output_i']:.1f} LUFS): 피크 제한 예산 {g['limiter_budget_db']} dB 소진. 내레이션 피크를 낮추거나 예산을 늘리세요")
+        rep["warnings"].append(f"목표 {lufs} LUFS에 못 미침({ln['output_i']:.1f} LUFS): 피크 제한 예산 {g['limiter_budget_db']} dB 소진. "
+            f"이 믹스로 목표를 맞추려면 예산이 약 {ln['needed_budget_db']} dB 필요(입력 피크 기준 추정). "
+            "예산을 늘리거나(왜곡 위험), 목표 음량을 낮추거나, BGM 상대 음량을 바꿔 보세요. 어느 쪽이 나은지는 들어서 정하세요")
     rep["loudnorm"] = ln
     rep["target"] = {"lufs": lufs, "true_peak_dbfs": tp}
     rep["master"] = str(out_wav)
@@ -283,14 +299,42 @@ def run_mix(ctx: Context, timeline: dict, fit: dict, *, work: Path, out_wav: Pat
 
 # ---------------------------------------------------------------- 렌더 + manifest
 
+def caption_style(ctx: Context):
+    from .captions.ass import CaptionStyle
+    cs = {**(ctx.cfg.defaults.get("captions") or {}), **ctx.project.caption_style}
+    ff_ = cs.get("font_file")
+    prof = ctx.cfg.profile(ctx.project.profile)
+    return CaptionStyle(font_file=(ctx.project.root / ff_) if ff_ else None, font_license=str(cs.get("font_license") or ""),
+                        font_size=int(cs.get("font_size", 64)), margin_v=int(cs.get("margin_v", 420)),
+                        margin_h=int(cs.get("margin_h", 90)), width=prof["width"], height=prof["height"])
+
+
+def captions_from_fit(fit: dict) -> list:
+    from .captions.ass import Caption
+    out = []
+    for r in fit["items"]:
+        for seg in r["audio"]["segments"]:
+            a = r["at_us"]
+            out.append(Caption(a + seg["start_us"], a + seg["end_us"], seg["original"],
+                               [{"text": w["text"], "start_us": a + w["start_us"], "end_us": a + w["end_us"]}
+                                for w in seg.get("words", [])]))
+    return sorted(out, key=lambda c: c.start_us)
+
+
 def run_render(ctx: Context, timeline: dict, mix_rep: dict, fit: dict, *, preview: bool) -> dict:
     info = video_info(ctx)
     profile = ctx.cfg.profile(ctx.project.profile)
     suffix = ".preview.mp4" if preview else ".mp4"
     out = ctx.path("out", f"{ctx.project.project_id}{suffix}")
-    r = mux(ctx.ff, info, Path(mix_rep["master"]), out, profile, ctx.project.reframe)
+    burn = None
+    if ctx.project.captions == "burn_in":
+        from .captions.ass import prepare_ass_dir
+        if not ctx.ff.has_filter("ass"):
+            raise ConfigError("이 FFmpeg 빌드에는 ass 필터(libass)가 없어 burn-in 자막을 쓸 수 없습니다. output.captions: sidecar_srt를 쓰세요")
+        burn = prepare_ass_dir(ctx.path("cache", "burn"), captions_from_fit(fit), caption_style(ctx))
+    r = mux(ctx.ff, info, Path(mix_rep["master"]), out, profile, ctx.project.reframe, burn_dir=burn)
     res = {"output": str(out), "sha256": sha256_file(out), **r, "preview": preview}
-    if ctx.project.captions == "sidecar_srt":
+    if ctx.project.captions in ("sidecar_srt", "burn_in"):
         srt = out.with_suffix(".srt")
         write_srt(srt, fit["items"])
         res["srt"] = str(srt)

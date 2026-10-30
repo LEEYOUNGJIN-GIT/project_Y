@@ -110,6 +110,12 @@ def prepare_bgm(ff: FFmpeg, src: Path, src_duration_us: int, duration_us: int, o
     return info
 
 
+def trim_head(ff: FFmpeg, src: Path, head_us: int, out: Path, work: Path) -> None:
+    """앞 head_us를 잘라 낸다 (BGM 박을 첫 호흡에 맞추기 위함)."""
+    _run_script(ff, [src], f"[0:a]atrim=start={head_us / US:.6f},asetpts=PTS-STARTPTS[o]", "o", out, work,
+                context="BGM 앞부분 정렬")
+
+
 def apply_gain(ff: FFmpeg, src: Path, out: Path, work: Path, *, gain_db: float) -> None:
     _run_script(ff, [src], f"[0:a]volume={gain_db}dB[o]", "o", out, work, context="이득 적용")
 
@@ -118,11 +124,22 @@ def apply_envelope(ff: FFmpeg, src: Path, env: Path, out: Path, work: Path) -> N
     _run_script(ff, [src, env], "[0:a][1:a]amultiply[o]", "o", out, work, context="덕킹 적용")
 
 
-def extract_original(ff: FFmpeg, media: Path, start_us: int, duration_us: int, out: Path, work: Path) -> None:
-    """원본 영상의 소리를 [start, start+duration] 구간으로 뽑아 48 kHz 스테레오로 맞춘다."""
+def extract_original(ff: FFmpeg, media: Path, start_us: int, duration_us: int, out: Path, work: Path, *,
+                     stream_offset_us: int = 0) -> None:
+    """원본 영상의 소리를 [start, start+duration] (영상 시간) 구간으로 뽑아 48 kHz 스테레오로 맞춘다.
+
+    stream_offset_us: 디코드한 오디오 0초가 영상 시간의 몇 us인지(오디오 start_time - 영상 start_time).
+    """
     total = us_to_samples(duration_us, RATE)
     s = start_us / US
-    script = (f"[0:a]atrim=start={s:.6f},asetpts=PTS-STARTPTS,{_FMT},"
+    if stream_offset_us > 0:
+        # adelay는 샘플만 채우고 프레임 PTS에는 스트림 시작 오프셋이 남으므로, 뒤의 atrim이 영상 시간과 어긋나지 않게 PTS를 0으로 되돌린다
+        pre = f"adelay=delays={us_to_samples(stream_offset_us, RATE)}S:all=1,asetpts=PTS-STARTPTS,"
+    elif stream_offset_us < 0:
+        pre = f"atrim=start_sample={us_to_samples(-stream_offset_us, RATE)},asetpts=PTS-STARTPTS,"
+    else:
+        pre = ""
+    script = (f"[0:a]{_FMT},{pre}atrim=start={s:.6f},asetpts=PTS-STARTPTS,"
               f"apad=whole_len={total},atrim=end_sample={total}[o]")
     _run_script(ff, [media], script, "o", out, work, context="원본 소리 추출")
 
@@ -131,6 +148,13 @@ def sum_stems(ff: FFmpeg, stems: list[Path], out: Path, work: Path) -> None:
     labels = "".join(f"[{i}:a]" for i in range(len(stems)))
     script = f"{labels}amix=inputs={len(stems)}:normalize=0:duration=longest:dropout_transition=0[o]"
     _run_script(ff, stems, script, "o", out, work, context="스템 합산")
+
+
+def stretch_audio(ff: FFmpeg, src: Path, tempo: float, out: Path, work: Path) -> None:
+    """피치를 유지한 채 길이를 1/tempo배로 만든다 (atempo, 범위 0.5-2.0). 미세 드리프트 보정용."""
+    if not 0.5 <= tempo <= 2.0:
+        raise ValueError(f"atempo 범위(0.5-2.0) 밖: {tempo}")
+    _run_script(ff, [src], f"[0:a]atempo={tempo:.8f}[o]", "o", out, work, context="드리프트 보정(atempo)")
 
 
 def align_audio(ff: FFmpeg, src: Path, shift_us: int, duration_us: int, out: Path, work: Path) -> None:
@@ -164,7 +188,7 @@ def compute_bgm_gain(ff: FFmpeg, narration_bus: Path, bgm_fit: Path, level_rel_d
     n = measure_ebur128(ff, narration_bus).integrated
     b = measure_ebur128(ff, bgm_fit).integrated
     if n is None or b is None:
-        raise RuntimeError("내레이션 또는 BGM이 무음이라 상대 음량을 계산할 수 없습니다")
+        raise ValueError("내레이션 또는 BGM이 무음이라 상대 음량을 계산할 수 없습니다")
     return (n + level_rel_db) - b, n, b
 
 

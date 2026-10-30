@@ -19,6 +19,7 @@ class TTSCapabilities:
     # "phoneme_markup": [word](/ipa/) 식 표기, "respell": 철자 치환만 가능, "none"
     pronunciation_mode: str = "respell"
     production_ok: bool = True   # False면 파이프라인 시험 전용
+    network: bool = False        # True면 호출마다 외부로 텍스트가 나가고 한도가 있을 수 있음
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -51,3 +52,7 @@ class TTSProvider(Protocol):
 
 class ProviderError(RuntimeError):
     pass
+
+
+class RateLimitError(ProviderError):
+    """한도/일시 차단. 재시도 횟수를 다 써도 계속되면 올린다 (fail closed)."""

@@ -18,39 +18,16 @@ from .tts.normalize import apply_pronunciations, split_sentences
 
 
 def _peak_mb(provider) -> tuple[float | None, str]:
-    """측정할 수 있는 만큼만 보고한다. 측정 방식을 함께 돌려준다."""
-    proc = getattr(provider, "_proc", None)
-    if proc is not None:
-        pid = proc.pid
-        if os.name != "nt":
-            try:
-                for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-                    if line.startswith("VmHWM:"):
-                        return int(line.split()[1]) / 1024, "워커 프로세스 VmHWM"
-            except OSError:
-                pass
-        else:
-            try:
-                import ctypes
-                from ctypes import wintypes
+    """측정할 수 있는 만큼만 보고한다. 측정 방식을 함께 돌려준다.
 
-                class PMC(ctypes.Structure):
-                    _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
-                                ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
-                                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                                ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
-                k32, psapi = ctypes.windll.kernel32, ctypes.windll.psapi
-                h = k32.OpenProcess(0x1000 | 0x0400, False, pid)   # QUERY_LIMITED | QUERY_INFORMATION
-                pmc = PMC()
-                pmc.cb = ctypes.sizeof(PMC)
-                ok = psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb)
-                k32.CloseHandle(h)
-                if ok:
-                    return pmc.PeakWorkingSetSize / 1024 ** 2, "워커 프로세스 PeakWorkingSetSize"
-            except Exception:  # noqa: BLE001
-                pass
-        return None, "측정 실패"
+    워커 프로세스가 있으면 워커가 자기 값을 보고하게 한다(Windows venv의 python.exe 런처 문제로 PID 측정은 틀린다).
+    """
+    stats = getattr(provider, "stats", None)
+    if callable(stats):
+        st = stats()
+        if st and st.get("peak_rss_mb"):
+            return float(st["peak_rss_mb"]), "워커 자체 보고(최대 상주 메모리)"
+        return None, "워커가 메모리 보고를 지원하지 않음"
     try:
         import resource
         return resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1024, "자식 프로세스 최대 RSS(ffmpeg 등 포함)"
@@ -60,7 +37,7 @@ def _peak_mb(provider) -> tuple[float | None, str]:
 
 def run_benchmark(cfg: Config, ff: FFmpeg, provider_name: str, *, voice: str | None, targets_s: list[int],
                   sentences_file: Path, listen_dir: Path | None, pron: dict[str, str] | None = None,
-                  acceptance: dict | None = None, report_dir: Path) -> dict:
+                  acceptance: dict | None = None, report_dir: Path, listen_limit: int | None = None) -> dict:
     sentences = [s.strip() for s in sentences_file.read_text(encoding="utf-8").splitlines() if s.strip()]
     provider = create_tts_provider(provider_name, cfg, ff)
     tmp = Path(tempfile.mkdtemp(prefix="avsync_bench_"))
@@ -98,7 +75,7 @@ def run_benchmark(cfg: Config, ff: FFmpeg, provider_name: str, *, voice: str | N
         listening = []
         if listen_dir:
             listen_dir.mkdir(parents=True, exist_ok=True)
-            for k, sent in enumerate(sentences, 1):
+            for k, sent in enumerate(sentences[:listen_limit] if listen_limit else sentences, 1):
                 parts = []
                 for j, ss in enumerate(split_sentences(sent)):
                     _, r = synth(ss, f"L{k}_{j}")
@@ -129,7 +106,8 @@ def run_benchmark(cfg: Config, ff: FFmpeg, provider_name: str, *, voice: str | N
             "cold_start_s": round(cold_total, 2), "first_request_s": round(first_s, 2),
             "provider_reported_cold_start_s": getattr(provider, "cold_start_s", None),
             "runs": runs, "peak_memory_mb": round(peak, 1) if peak else None, "peak_memory_method": how,
-            "listening": listening, "listening_sentences": len(sentences),
+            "listening": listening, "listening_sentences": len(listening),
+            "network_provider": caps.network,
             "acceptance": acceptance, "verdict": _verdict(runs, cold_total, acceptance, caps.production_ok),
         }
         write_json(report_dir / f"benchmark_{provider_name}.json", rep)

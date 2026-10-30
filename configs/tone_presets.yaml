@@ -3,10 +3,11 @@ yoga_flow_calm:
   tts:
     voice_candidates: 3          # 공급자 음색 목록 확인 필요 [재확인]
     speed: 0.95
-    cue_speed: 1.00              # MVP 미구현: 항목별 cue 구분이 없다 (docs/open_questions.md)
+    cue_speed: 1.00              # 모든 단어가 큐 단어(발음 사전 키 + script의 cue_words)인 문장에 적용
     pause_between_sentences_ms: 450
     max_cue_words: 6
-    emphasis: pause_only         # MVP 미구현: 경고만 낸다
+    emphasis: pause_only         # 강조 단어 앞뒤에 emphasis_pause_ms 무음 (조각 합성)
+    emphasis_pause_ms: 150       # 시작값, 청취로 조정
     moods:                       # 무드는 속도 배율로만 표현한다 (5.1-6). 배율 값은 이 도구의 임의 시작값
       calm: 1.00
       warm: 0.98

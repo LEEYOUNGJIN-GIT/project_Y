@@ -11,7 +11,7 @@ _RATE = 16000
 class FliteProvider:
     def __init__(self, ffmpeg: FFmpeg):
         self.ff = ffmpeg
-        if "flite" not in ffmpeg.filters():
+        if not ffmpeg.has_filter("flite"):
             raise ProviderError("이 FFmpeg 빌드에는 flite 필터가 없습니다")
 
     def capabilities(self) -> TTSCapabilities:

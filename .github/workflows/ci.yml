@@ -1,0 +1,165 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install FFmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - run: uv sync
+      - run: uv run avsync doctor
+        continue-on-error: true      # PATH 폴백 경고 등은 실패로 보지 않는다. 결과는 로그로 확인
+      - run: uv run pytest -q
+
+  # Kokoro를 실제로 설치·실행해 보는 점검. 개발 환경에서는 모델 호스트가 막혀 있어 여기서만 검증할 수 있다.
+  # 러너 성능은 사용자 PC와 다르므로 RTF/메모리는 참고용이다 (판단 근거 아님).
+  kokoro-smoke:
+    name: kokoro-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install FFmpeg (Windows)
+        run: choco install ffmpeg -y --no-progress
+      - run: uv sync
+      - name: Kokoro 환경 설치 (scripts/setup_kokoro.ps1, Windows PowerShell 5.1)
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts\setup_kokoro.ps1
+      - name: 벤치마크 + 샘플 가이드 합성
+        run: uv run python scripts/ci_kokoro_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kokoro-smoke-${{ matrix.os }}
+          path: ci_artifacts/
+          if-no-files-found: warn
+
+  voice-lab:
+    name: voice-lab (windows-latest)
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install FFmpeg (Windows)
+        run: choco install ffmpeg -y --no-progress
+      - run: uv sync
+      - name: Kokoro 환경 설치
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File scripts\setup_kokoro.ps1
+      - name: 요가 큐잉 목소리 변형 합성 (청취용)
+        run: uv run python scripts/ci_voice_lab.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-lab
+          path: ci_artifacts/
+          if-no-files-found: warn
+
+  tts-survey:
+    name: tts-survey (HuggingFace candidates)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: TTS 후보 조사 (HuggingFace 직접 조회)
+        run: uv run --no-project --with huggingface_hub python scripts/ci_tts_survey.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tts-survey
+          path: ci_artifacts/
+          if-no-files-found: warn
+
+  repo-docs:
+    name: repo-docs (candidate GitHub READMEs)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    steps:
+      - uses: actions/checkout@v4
+      - run: python scripts/ci_repo_docs.py
+
+  qwen-trial:
+    name: qwen-trial (windows-latest, CPU)
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Qwen3-TTS 설치 (Python 3.12, CPU)
+        run: |
+          uv venv .venv_qwen --python 3.12
+          uv pip install --python .venv_qwen\Scripts\python.exe qwen-tts soundfile psutil
+      - name: Qwen3-TTS CPU 시험 합성
+        run: .venv_qwen\Scripts\python.exe scripts\ci_qwen_trial.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qwen-trial
+          path: ci_artifacts/
+          if-no-files-found: warn
+
+  qwen-design-trial:
+    name: qwen-design-trial (1.7B VoiceDesign, windows CPU)
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Qwen3-TTS 설치 (Python 3.12, CPU)
+        run: |
+          uv venv .venv_qwen --python 3.12
+          uv pip install --python .venv_qwen\Scripts\python.exe qwen-tts soundfile psutil huggingface_hub
+      - name: Qwen3-TTS 1.7B VoiceDesign CPU 시험 합성
+        run: .venv_qwen\Scripts\python.exe scripts\ci_qwen_design_trial.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qwen-design-trial
+          path: ci_artifacts/
+          if-no-files-found: warn
+
+  qwen-clone-trial:
+    name: qwen-clone-trial (consistency: design vs clone, windows CPU)
+    runs-on: windows-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'claude/dreamy-ride-etkw8p'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Qwen3-TTS 설치 (Python 3.12, CPU)
+        run: |
+          uv venv .venv_qwen --python 3.12
+          uv pip install --python .venv_qwen\Scripts\python.exe qwen-tts soundfile psutil huggingface_hub
+      - name: 화자 일관성 시험 (줄마다 설계 vs 한 기준 음성 복제)
+        run: .venv_qwen\Scripts\python.exe scripts\ci_qwen_clone_trial.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qwen-clone-trial
+          path: ci_artifacts/
+          if-no-files-found: warn

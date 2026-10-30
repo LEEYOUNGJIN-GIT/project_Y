@@ -49,9 +49,9 @@ class FFmpeg:
     def __init__(self, tools: Tools):
         self.tools = tools
 
-    def run(self, args, *, context: str = "ffmpeg", timeout: float | None = None) -> ProcResult:
+    def run(self, args, *, context: str = "ffmpeg", timeout: float | None = None, cwd: Path | None = None) -> ProcResult:
         base = [self.tools.ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error"]
-        return run([*base, *args], check=True, context=context, timeout=timeout)
+        return run([*base, *args], check=True, context=context, timeout=timeout, cwd=cwd)
 
     def run_raw(self, args, *, context: str = "ffmpeg", timeout: float | None = None,
                 loglevel: str = "info") -> ProcResult:
@@ -61,6 +61,11 @@ class FFmpeg:
 
     def version(self) -> str:
         return run([self.tools.ffmpeg, "-version"], check=True).stdout
+
+    def has_filter(self, name: str) -> bool:
+        """`-filters` 출력은 버전마다 열 형식이 달라(9.x에서 확인) 파싱 대신 `-h filter=NAME`으로 존재를 확인한다."""
+        out = run([self.tools.ffmpeg, "-hide_banner", "-h", f"filter={name}"])
+        return f"Filter {name}" in out.stdout
 
     def filters(self) -> set[str]:
         out = run([self.tools.ffmpeg, "-hide_banner", "-filters"], check=True).stdout

@@ -66,17 +66,24 @@ def concat(parts: list[Pcm]) -> Pcm:
     return Pcm(rate, ch, out)
 
 
-def trim_silence(pcm: Pcm, *, threshold_db: float = -45.0, keep_head_ms: int = 20, keep_tail_ms: int = 60) -> Pcm:
-    """앞뒤 무음을 잘라 항목의 `at`이 '발화 시작'을 뜻하게 한다. 공급자마다 앞뒤 무음 길이가 달라서 필요하다."""
+def trim_silence(pcm: Pcm, **kw) -> Pcm:
+    return trim_silence_info(pcm, **kw)[0]
+
+
+def trim_silence_info(pcm: Pcm, *, threshold_db: float = -45.0, keep_head_ms: int = 20,
+                      keep_tail_ms: int = 60) -> tuple[Pcm, int]:
+    """앞뒤 무음을 잘라 항목의 `at`이 '발화 시작'을 뜻하게 한다. 공급자마다 앞뒤 무음 길이가 달라서 필요하다.
+
+    (잘린 결과, 앞에서 잘라낸 프레임 수)를 돌려준다. 단어 타임스탬프를 같은 만큼 앞당기는 데 쓴다."""
     thr = int(32768 * 10 ** (threshold_db / 20))
     ch = pcm.channels
     data = pcm.data
     n = pcm.frames
     first = next((i for i in range(n) if any(abs(data[i * ch + c]) > thr for c in range(ch))), None)
     if first is None:
-        return pcm
+        return pcm, 0
     last = next(i for i in range(n - 1, -1, -1) if any(abs(data[i * ch + c]) > thr for c in range(ch)))
     head = int(pcm.rate * keep_head_ms / 1000)
     tail = int(pcm.rate * keep_tail_ms / 1000)
     a, b = max(0, first - head), min(n, last + 1 + tail)
-    return Pcm(pcm.rate, ch, array("h", data[a * ch:b * ch]))
+    return Pcm(pcm.rate, ch, array("h", data[a * ch:b * ch])), a

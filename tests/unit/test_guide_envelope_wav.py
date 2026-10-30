@@ -43,7 +43,6 @@ def test_schedule_arithmetic(tmp_path):
 
 def test_sample_case_total_is_94_5(tmp_path):
     """문서 12.5: 6 + 19카운트 x 4.5 + 3 = 94.5초."""
-    body = EXAMPLE.replace("l06, counts: 11", "l06, counts: 11")
     ids = [f"l0{i}" for i in range(1, 10)]
     steps = "\n".join(f"  - {{line: {i}, counts: {11 if i == 'l06' else 1}}}" for i in ids)
     spec = guide(tmp_path, f"mode: audio_first\ncount_in: {{text: 'Ready', count_in_s: 6.0}}\nbreath: {{count_s: 4.5}}\nsteps:\n{steps}\ntail_s: 3.0\n")

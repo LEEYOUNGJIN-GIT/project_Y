@@ -1,4 +1,4 @@
-# Kokoro 공급자 환경 설치 (Windows PowerShell 5.1+).
+﻿# Kokoro 공급자 환경 설치 (Windows PowerShell 5.1+).
 # 실행 정책으로 막히면:  powershell -ExecutionPolicy Bypass -File scripts\setup_kokoro.ps1
 # 또는 아래 "수동 명령"을 한 줄씩 직접 실행한다.
 #

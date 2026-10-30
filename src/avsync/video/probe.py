@@ -33,6 +33,13 @@ class VideoInfo:
     audio_channels: int | None
     audio_duration_us: int | None
     nb_frames: int | None
+    video_start_us: int = 0
+    audio_start_us: int = 0
+
+    @property
+    def audio_offset_us(self) -> int:
+        """디코드한 오디오의 0초가 영상 시간의 몇 us에 해당하는가. 카메라 파일은 수십 ms 어긋나기도 한다."""
+        return self.audio_start_us - self.video_start_us
 
     @property
     def fps(self) -> Fraction:
@@ -112,6 +119,7 @@ def probe_video(tools: Tools, path: Path) -> VideoInfo:
         audio_channels=int(a["channels"]) if a and a.get("channels") else None,
         audio_duration_us=_dur_us(a.get("duration")) if a else None,
         nb_frames=int(nb) if nb and nb != "N/A" else None,
+        video_start_us=_dur_us(v.get("start_time")) or 0, audio_start_us=(_dur_us(a.get("start_time")) or 0) if a else 0,
     )
 
 

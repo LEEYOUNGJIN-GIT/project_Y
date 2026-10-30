@@ -22,6 +22,29 @@ providers:
     env_dir: provider_envs/kokoro
     default_voice: null            # 청취 후 사용자가 선택. null이면 합성 요청이 거부된다
     lang: en-US
+  gemini:                          # 5.7. 공식 gemini-api CLI를 감싼다. 키는 CLI/환경변수가 관리하며 이 도구는 읽지 않는다
+    kind: cli
+    cli_path: null                 # null이면 환경변수 AVSYNC_GEMINI_CLI, 그다음 PATH의 gemini-api
+    default_voice: null            # `gemini-api tts --help`로 확인한 음성을 청취 후 지정
+    model: null                    # null이면 CLI 기본 모델
+    style_prefix: ""               # 예: "Say calmly and slowly: " (모델이 소리 내어 읽는지는 청취로 확인해야 함)
+    free_only: true                # confirm-free 확인 없이는 호출 거부
+    max_retries: 2
+    timeout_s: 120
   flite:
     kind: builtin
     note: "FFmpeg libflite. 파이프라인 시험 전용. 품질 평가·실제 제작에 쓰지 않는다"
+
+# burn-in 자막. 폰트는 시스템 폰트를 임의로 쓰지 않고 파일과 라이선스를 지정한다 (8장).
+# project.yaml의 output.caption_style로 덮어쓴다. margin_v(아래 여백, px)는 플랫폼 UI 안전 영역 미확인이라 시작값.
+captions:
+  font_size: 64
+  margin_v: 420
+  margin_h: 90
+
+# 원격 GPU (6장). 토큰은 kaggle CLI의 표준 위치(KAGGLE_API_TOKEN 또는 ~/.kaggle)에 두며 이 도구는 읽지 않는다.
+remote:
+  kaggle:
+    owner: null          # Kaggle 사용자명 (커널 id = owner/slug)
+    accelerator: null    # 예: NvidiaTeslaT4. null이면 Kaggle 기본 GPU. 한도·GPU 종류는 하드코딩하지 않는다
+    cli_path: null

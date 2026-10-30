@@ -12,3 +12,5 @@ reports/listening/
 .env
 reports/ffmpeg_build.txt
 reports/benchmark_*.json
+ci_artifacts/
+reports/gemini_ack.log

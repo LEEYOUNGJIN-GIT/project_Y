@@ -13,12 +13,11 @@ from ..domain.hashing import sha256_file, sha256_json
 from ..domain.manifest import now_iso, read_json, write_json
 from ..domain.script import Line, load_script
 from ..domain.timebase import fmt_time, us_to_samples
-from ..providers.tts.base import ProviderError
 from .schedule import GuidePlan, GuideSpec, build_plan, load_guide
 
 TONE_RATE = 48000
 # 소리를 바꾸는 코드 변경(무음 트리밍, 믹스 공식 등)이 있을 때 올린다. 올리면 가이드 해시가 바뀌어 재촬영 경고가 나온다.
-SOUND_ENGINE_VERSION = 2
+SOUND_ENGINE_VERSION = 3
 
 
 def write_tone(path: Path, hz: float, ms: int, fade_ms: int = 5) -> int:
@@ -73,12 +72,46 @@ def schedule_table(plan: GuidePlan, fit: dict | None) -> str:
     return "\n".join(rows)
 
 
+def resolve_beats(ctx: P.Context, spec: GuideSpec) -> tuple[GuideSpec, dict | None]:
+    """음악 우선: count_beats x 60/BPM 으로 호흡 길이를 정한다. from_bgm이면 프로젝트 BGM을 분석한다."""
+    from ..audio.beats import analyze_file
+    if spec.count_beats is None:
+        return spec, None
+    info = None
+    bgm = ctx.project.bgm
+    need_analysis = spec.bpm == "from_bgm" or spec.beat_align
+    if need_analysis:
+        if bgm.source != "imported" or bgm.path is None or not bgm.path.is_file():
+            raise P.ConfigError("breath.bpm: from_bgm / beat_align에는 audio.bgm.source: imported 와 존재하는 BGM 파일이 필요합니다")
+        from ..audio.beats import BeatInfo
+        cache = ctx.path("cache", f"beats_{sha256_file(bgm.path)[:12]}.json")
+        if not cache.is_file():
+            write_json(cache, analyze_file(ctx.ff, bgm.path, ctx.path("cache", "beats_work")).as_dict())
+        # 첫 실행과 캐시를 읽는 이후 실행이 같은 값을 쓰도록 항상 캐시(반올림된 값)에서 읽는다
+        d = read_json(cache)
+        info = BeatInfo(d["bpm"], d["period_us"], d["phase_us"], d["confidence"], d["beats_us"], d["downbeat_offset"], d["notes"])
+    if spec.bpm == "from_bgm":
+        if not info.has_beat:
+            raise P.ConfigError(f"BGM에서 안정적인 박자를 찾지 못했습니다 ({'; '.join(info.notes)}). "
+                                f"breath.bpm에 숫자를 직접 적거나 count_s를 쓰세요")
+        bpm = info.bpm
+    else:
+        bpm = float(spec.bpm)
+    count_us = round(spec.count_beats * 60_000_000 / bpm)
+    d = {"bpm_used": bpm, "bpm_source": spec.bpm if spec.bpm == "from_bgm" else "explicit",
+         "count_beats": spec.count_beats, "count_us": count_us, "analysis": info.as_dict() if info else None, "warnings": []}
+    if info is not None and info.has_beat and spec.bpm != "from_bgm" and abs(info.bpm - bpm) / bpm > 0.01:
+        d["warnings"].append(f"명시한 BPM {bpm:g}이 BGM 분석값 {info.bpm:.1f}과 1% 넘게 다름 - 박 정렬 의미가 없을 수 있음")
+    return dataclasses.replace(spec, count_us=count_us), d
+
+
 def build_guide(ctx: P.Context, *, provider_name: str | None = None, dry_run: bool = False) -> dict:
     proj = ctx.project
     if proj.guide is None:
         raise P.ConfigError("project.yaml의 input.guide가 필요합니다 (audio-first)")
     script = load_script(proj.script, require_at=False)
     spec: GuideSpec = load_guide(proj.guide)
+    spec, beat_res = resolve_beats(ctx, spec)
     gg = ctx.gates["guide"]
     lead_ms = spec.lead_in_ms if spec.lead_in_ms is not None else gg["lead_in_ms"]
     plan = build_plan(spec, script.by_id(), lead_in_ms=lead_ms)
@@ -96,7 +129,9 @@ def build_guide(ctx: P.Context, *, provider_name: str | None = None, dry_run: bo
     timeline = {"schema": 1, "mode": "audio_first", "duration_us": plan.total_us, "fps": None, "video": None,
                 "items": [{k: v for k, v in it.items() if k != "kind"} for it in plan.items],
                 "no_narration": [], "script_sha256": sha256_file(proj.script)}
-    result: dict = {"plan": dataclasses.asdict(plan), "notes": notes, "total_us": plan.total_us}
+    result: dict = {"plan": dataclasses.asdict(plan), "notes": notes, "total_us": plan.total_us, "beats": beat_res}
+    if beat_res:
+        notes += beat_res["warnings"]
     if dry_run:
         result["table"] = schedule_table(plan, None)
         return result
@@ -123,8 +158,16 @@ def build_guide(ctx: P.Context, *, provider_name: str | None = None, dry_run: bo
         dur = write_tone(tone_wav, gg["tone_hz"], gg["tone_ms"])
         cue_items.append(BusItem(tone_wav, plan.tone_at_us, dur, "tone"))
     wav = outdir / f"{stem}.wav"
+    head_trim = 0
+    if spec.beat_align and beat_res and beat_res["analysis"] and beat_res["analysis"]["bpm"]:
+        a = beat_res["analysis"]
+        head_trim = (a["phase_us"] - plan.count_in_us) % a["period_us"]           # 첫 호흡 시각에 BGM의 박이 오도록
+        notes.append(f"박 정렬: BGM 앞 {head_trim / 1e6:.3f}초를 잘라 첫 호흡({fmt_time(plan.count_in_us)})을 박에 맞춤 "
+                     f"(분석 {a['bpm']:.1f} BPM, 신뢰도 {a['confidence']:.2f})")
+    elif spec.beat_align:
+        notes.append("박 정렬 요청이 있으나 BGM에서 박자를 찾지 못해 정렬하지 않음")
     mix = P.run_mix(ctx, timeline, fit, work=work, out_wav=wav, original_media=None, original_policy="remove",
-                    original_has_audio=False, cue_items=cue_items)
+                    original_has_audio=False, cue_items=cue_items, bgm_head_trim_us=head_trim)
     m4a = outdir / f"{stem}.m4a"
     ctx.ff.run(["-i", str(wav), "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(m4a)], context="m4a 내보내기")
 
@@ -134,15 +177,17 @@ def build_guide(ctx: P.Context, *, provider_name: str | None = None, dry_run: bo
             continue
         for seg in r["audio"]["segments"]:
             captions.append({"start_us": r["at_us"] + seg["start_us"], "end_us": r["at_us"] + seg["end_us"],
-                             "text": seg["original"]})
+                             "text": seg["original"],
+                             "words": [{"text": w["text"], "start_us": r["at_us"] + w["start_us"],
+                                        "end_us": r["at_us"] + w["end_us"]} for w in seg.get("words", [])]})
     gjson = {
         "schema": 1, "created": now_iso(), "hash": ghash, "hash8": h8, "approved": approved,
         "project_id": proj.project_id, "wav": str(wav), "m4a": str(m4a), "wav_sha256": sha256_file(wav),
         "total_us": plan.total_us, "count_in_us": plan.count_in_us, "count_us": plan.count_us,
-        "tone_at_us": plan.tone_at_us, "lead_in_us": plan.lead_in_us,
+        "tone_at_us": plan.tone_at_us, "tone_hz": gg["tone_hz"], "tone_ms": gg["tone_ms"], "lead_in_us": plan.lead_in_us,
         "steps": [dataclasses.asdict(s) for s in plan.steps],
         "narration_windows": mix["narration_windows"], "captions": captions,
-        "loudness_target": mix["target"], "provider": fit["provider"]["name"],
+        "loudness_target": mix["target"], "provider": fit["provider"]["name"], "beats": beat_res,
     }
     gpath = outdir / f"{stem}.json"
     write_json(gpath, gjson)

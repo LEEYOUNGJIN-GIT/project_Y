@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from .keys import SCRIPT, check_tree, unknown_keys
 from .timebase import TimeError, parse_time
 
 LINE_KEY = "__line__"
@@ -58,6 +59,8 @@ class Script:
     pronunciations: dict[str, str]
     lines: list[Line]
     no_narration: list[tuple[int, int]]
+    cue_words: list[str] = field(default_factory=list)   # 큐 단어 추가 지정(발음 사전 키는 자동으로 큐 단어)
+    warnings: list[str] = field(default_factory=list)    # 알 수 없는 키(오타) 등
 
     def by_id(self) -> dict[str, Line]:
         return {ln.id: ln for ln in self.lines}
@@ -182,5 +185,8 @@ def load_script(path: Path, *, require_at: bool, fps: Fraction | None = None) ->
 
     if problems:
         raise ScriptError(problems)
+    warns = check_tree(data, {k: v for k, v in SCRIPT.items() if k != "line"}, "")
+    for item in raw_lines:
+        warns += unknown_keys(item, SCRIPT["line"], f"lines[{item.get('id', '?')}] (줄 {item.get(LINE_KEY, '?')})") if isinstance(item, dict) else []
     return Script(approved=approved, voice=voice, pronunciations=pronunciations,
-                  lines=lines, no_narration=windows)
+                  lines=lines, no_narration=windows, cue_words=[str(w) for w in (data.get("cue_words") or [])], warnings=warns)

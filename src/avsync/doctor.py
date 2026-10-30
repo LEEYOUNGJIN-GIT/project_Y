@@ -24,7 +24,8 @@ REQUIRED_FILTERS = {
 }
 OPTIONAL_FILTERS = {
     "sidechaincompress": "문서 5.4의 사이드체인 덕킹 (이 구현은 이득 곡선 방식을 쓰므로 필수 아님)",
-    "subtitles": "burn-in 자막(후순위, libass 필요)",
+    "ass": "burn-in 자막 (libass 필요). 없으면 sidecar_srt만 사용",
+    "subtitles": "SRT burn-in (libass 필요)",
     "flite": "오프라인 시험용 TTS(제작에는 쓰지 않음)",
 }
 
@@ -83,7 +84,6 @@ def run_doctor(cfg: Config | None = None, workdir: Path | None = None, write_rep
     reports = Path(cfg.root) / "reports"
     if ff:
         ver = ff.version()
-        filters = ff.filters()
         first = ver.splitlines()[0]
         lic = "GPL" if "--enable-gpl" in ver else "LGPL/기타"
         nonfree = "--enable-nonfree" in ver
@@ -91,9 +91,10 @@ def run_doctor(cfg: Config | None = None, workdir: Path | None = None, write_rep
         add("ffmpeg_license", "warn" if nonfree else "info",
             f"{lic} 구성{' + nonfree(재배포 불가, 개인 사용만)' if nonfree else ''} - 개인 사용 기록용 (문서 10장)")
         for f, why in REQUIRED_FILTERS.items():
-            add(f"filter:{f}", "pass" if f in filters else "fail", why)
+            add(f"filter:{f}", "pass" if ff.has_filter(f) else "fail", why)
         for f, why in OPTIONAL_FILTERS.items():
-            add(f"filter:{f}", "pass" if f in filters else "info", f"{'있음' if f in filters else '없음'} - {why}")
+            ok = ff.has_filter(f)
+            add(f"filter:{f}", "pass" if ok else "info", f"{'있음' if ok else '없음'} - {why}")
         amix_h = run([ff.tools.ffmpeg, "-hide_banner", "-h", "filter=amix"]).stdout
         add("amix:normalize", "pass" if "normalize" in amix_h else "fail", "amix normalize=0 옵션 필요 (FFmpeg 4.4+)")
         for enc in ("libx264", "aac"):
@@ -116,6 +117,15 @@ def run_doctor(cfg: Config | None = None, workdir: Path | None = None, write_rep
     kenv = cfg.root / "provider_envs" / "kokoro" / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
     add("kokoro_env", "pass" if kenv.is_file() else "info",
         "설치됨" if kenv.is_file() else "미설치 (Windows: scripts/setup_kokoro.ps1)")
+    prov = cfg.defaults.get("providers") or {}
+    g_cli = os.environ.get("AVSYNC_GEMINI_CLI") or (prov.get("gemini") or {}).get("cli_path") or shutil.which("gemini-api")
+    ack = cfg.model_cache() / "gemini_free_ack.json"
+    add("gemini_cli", "info", f"{g_cli}" if g_cli else "gemini-api CLI 없음 (선택 기능: Gemini TTS)")
+    if g_cli:
+        add("gemini_free_ack", "pass" if ack.is_file() else "info",
+            "무료 키 확인 완료" if ack.is_file() else "미확인 - Gemini 사용 전 `avsync gemini confirm-free --yes`")
+    k_cli = os.environ.get("AVSYNC_KAGGLE_CLI") or shutil.which("kaggle")
+    add("kaggle_cli", "info", f"{k_cli}" if k_cli else "kaggle CLI 없음 (선택 기능: 원격 GPU BGM)")
     status = "fail" if any(c["status"] == "fail" for c in checks) else (
         "warn" if any(c["status"] == "warn" for c in checks) else "pass")
     return {"status": status, "checks": checks}
