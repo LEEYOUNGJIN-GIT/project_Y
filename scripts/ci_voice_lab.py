@@ -102,6 +102,8 @@ def fx_chain(kind: str | None, rate: int) -> str:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):          # Windows 기본 콘솔 코덱(cp1252)은 한글 요약표를 출력하지 못한다
+        stream.reconfigure(encoding="utf-8")
     OUT.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
     tools = find_tools(cfg)
